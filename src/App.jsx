@@ -602,7 +602,7 @@ export default function App() {
                     <span className="bg-orange-500 text-white px-2 py-0.5 rounded-md text-xs shadow-sm">2</span> 再填表預約 👇
                   </p>
                   <p className="text-xs text-gray-600 font-bold leading-relaxed ml-7">
-                    看完想實戰、有疑問或需要專人陪練，請填寫下方表單讓店長為您安排！
+                    看完有疑問或需要專人說明，請填寫下方表單讓店長為您安排！
                   </p>
                 </div>
               </div>
