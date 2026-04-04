@@ -619,8 +619,9 @@ export default function App() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1"><User className="w-3.5 h-3.5"/> 您的稱呼/暱稱</label>
-                    <input required type="text" placeholder="例如：小智" value={reserveForm.name} onChange={(e) => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
+                    {/* 💡 這裡將原本的 您的稱呼/暱稱 改成 您的 LINE 名稱 */}
+                    <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1"><User className="w-3.5 h-3.5"/> 您的 LINE 名稱</label>
+                    <input required type="text" placeholder="請輸入您在 LINE 上的顯示名稱" value={reserveForm.name} onChange={(e) => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1"><Phone className="w-3.5 h-3.5"/> 聯絡方式 (LINE ID 或 電話)</label>
@@ -971,7 +972,8 @@ export default function App() {
                           </div>
                           
                           <div className="grid grid-cols-2 gap-2 text-sm">
-                            <div className="text-gray-800 font-black"><span className="text-gray-500 text-xs block">👤 暱稱</span>{res.name}</div>
+                            {/* 💡 這裡將原本的 暱稱 改成 LINE 名稱 */}
+                            <div className="text-gray-800 font-black"><span className="text-gray-500 text-xs block">👤 LINE 名稱</span>{res.name}</div>
                             <div className="text-gray-800 font-black"><span className="text-gray-500 text-xs block">📱 聯絡方式</span>{res.contact}</div>
                             <div className="text-gray-800 font-black col-span-2"><span className="text-gray-500 text-xs block">🗓️ 期望時間</span>{res.date} {res.time}</div>
                           </div>
