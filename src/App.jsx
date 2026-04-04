@@ -65,11 +65,10 @@ export default function App() {
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
 
-  // 表單狀態
+  // 表單狀態 (將日期時間獨立抽出來支援多場次)
+  const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
   const [formData, setFormData] = useState({
     gameType: 'UA',
-    date: '',
-    time: '19:00',
     title: '',
     fee: '',
     description: '',
@@ -172,14 +171,37 @@ export default function App() {
     }
   };
 
+  // 多重場次新增賽事
   const handleAddTournament = async (e) => {
     e.preventDefault();
-    if (!user || !formData.title || !formData.date || !formData.time) return;
+    if (!user || !formData.title || schedules.length === 0) return;
+    
+    // 過濾掉沒有填寫完整日期或時間的場次
+    const validSchedules = schedules.filter(s => s.date && s.time);
+    if (validSchedules.length === 0) return;
+
     try {
       const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
-      await addDoc(tournamentsRef, { ...formData, createdAt: new Date().toISOString(), createdBy: user.uid });
+      
+      // 使用迴圈為每一個「場次」發布一個獨立的賽事
+      const promises = validSchedules.map(schedule => 
+        addDoc(tournamentsRef, { 
+          ...formData, 
+          date: schedule.date,
+          time: schedule.time,
+          createdAt: new Date().toISOString(), 
+          createdBy: user.uid 
+        })
+      );
+      
+      await Promise.all(promises);
+
+      // 發布成功後清空表單，並將場次重置為 1 個
       setFormData({ ...formData, title: '', description: '', image: '' });
-    } catch (error) { console.error("Error adding document: ", error); }
+      setSchedules([{ date: '', time: '19:00' }]);
+    } catch (error) { 
+      console.error("Error adding document: ", error); 
+    }
   };
 
   const handleDelete = async (id) => {
@@ -257,6 +279,22 @@ export default function App() {
   // ==========================================
   // UI 輔助元件
   // ==========================================
+  const renderTextWithLinks = (text) => {
+    if (!text) return null;
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    
+    // 💡 特助修復：拔除容易產生記憶 Bug 的 test()，改用最暴力的 startsWith 來判斷！
+    return text.split(urlRegex).map((part, i) => 
+      (part.startsWith('http://') || part.startsWith('https://')) ? (
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline break-all font-black" onClick={(e) => e.stopPropagation()}>
+          {part}
+        </a>
+      ) : (
+        <span key={i}>{part}</span>
+      )
+    );
+  };
+
   const getDotColor = (bgClass) => {
     const dotMap = {
       'bg-red-200': 'bg-red-500', 'bg-orange-200': 'bg-orange-500', 'bg-yellow-200': 'bg-yellow-500',
@@ -366,7 +404,7 @@ export default function App() {
                           <Zap className="w-4 h-4 text-yellow-500" /><span className="font-bold">報名費：{t.fee}</span>
                         </div>
                         {t.description && (
-                          <p className="text-sm text-gray-600 whitespace-pre-line border-t border-gray-100 pt-3">{t.description}</p>
+                          <p className="text-sm text-gray-600 whitespace-pre-line border-t border-gray-100 pt-3">{renderTextWithLinks(t.description)}</p>
                         )}
                       </div>
                     ))}
@@ -624,14 +662,37 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-600 mb-1">日期</label>
-                        <input required type="date" className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} />
+                    {/* 🔥 升級：多重場次建立區塊 🔥 */}
+                    <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 shadow-inner">
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="block text-xs font-black text-orange-800">🗓️ 開賽日期與時間 (可一次新增多筆)</label>
+                        <button type="button" onClick={() => setSchedules([...schedules, { date: '', time: '19:00' }])} className="text-xs font-bold text-orange-600 bg-white px-2 py-1 rounded shadow-sm border border-orange-200 hover:bg-orange-100 flex items-center gap-1 transition-colors">
+                          <Plus className="w-3 h-3" /> 新增場次
+                        </button>
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-600 mb-1">時間</label>
-                        <input required type="time" className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={formData.time} onChange={(e) => setFormData({...formData, time: e.target.value})} />
+                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        {schedules.map((sch, index) => (
+                          <div key={index} className="flex gap-2 items-center">
+                            <input required type="date" className="flex-1 p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={sch.date} onChange={(e) => {
+                              const newSch = [...schedules];
+                              newSch[index].date = e.target.value;
+                              setSchedules(newSch);
+                            }} />
+                            <input required type="time" className="w-28 p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={sch.time} onChange={(e) => {
+                              const newSch = [...schedules];
+                              newSch[index].time = e.target.value;
+                              setSchedules(newSch);
+                            }} />
+                            {schedules.length > 1 && (
+                              <button type="button" onClick={() => {
+                                const newSch = schedules.filter((_, i) => i !== index);
+                                setSchedules(newSch);
+                              }} className="p-2 text-red-400 hover:text-red-600 transition-colors bg-white rounded-lg border border-red-100 hover:border-red-200 shadow-sm" title="移除此場次">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
 
