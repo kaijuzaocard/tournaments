@@ -172,7 +172,7 @@ export default function App() {
     }
   };
 
-  // 💡 特助升級：超強圖片壓縮機！突破 1MB 限制！
+  // 超強圖片壓縮機！突破 1MB 限制！
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -451,7 +451,7 @@ export default function App() {
                           <Zap className="w-4 h-4 text-yellow-500" /><span className="font-bold">報名費：{t.fee}</span>
                         </div>
                         
-                        {/* 💡 列表模式：加入智慧收合按鈕與圖文內容 */}
+                        {/* 列表模式：加入智慧收合按鈕與圖文內容 */}
                         {(t.image || t.description) && (
                           <div className="mt-1">
                             <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2 rounded-xl flex justify-center items-center gap-1 transition-colors border border-orange-100">
@@ -544,7 +544,7 @@ export default function App() {
                             </div>
                           </div>
                           
-                          {/* 💡 行事曆模式：加入智慧收合按鈕與圖文內容 */}
+                          {/* 行事曆模式：加入智慧收合按鈕與圖文內容 */}
                           {(t.image || t.description) && (
                             <div className="mt-2">
                               <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
@@ -577,10 +577,35 @@ export default function App() {
             {/* 新手教學預約區塊 */}
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
               <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-3 py-1.5 rounded-bl-xl shadow-sm">新手專區</div>
-              <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-2">
+              <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-4">
                 <BookOpen className="w-6 h-6 text-orange-500" /> 預約新手教學 🎓
               </h2>
-              <p className="text-sm text-gray-500 font-bold mb-4">想入坑但不知道怎麼玩？填寫表單，店長或熱心玩家手把手教你！</p>
+              
+              {/* 💡 特助優化：更流暢的「先看影片 ➔ 再預約實戰」動線 */}
+              <div className="mb-6 space-y-4 bg-orange-50 p-4 rounded-xl border border-orange-100 shadow-sm">
+                <div>
+                  <p className="text-sm text-gray-800 font-black mb-2 flex items-center gap-1.5">
+                    <span className="bg-orange-500 text-white px-2 py-0.5 rounded-md text-xs shadow-sm">1</span> 建議先看影片 📺
+                  </p>
+                  <a 
+                    href="https://lin.ee/n9FQFBB" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-1.5 w-full px-4 py-2.5 bg-[#06C755] text-white font-black rounded-xl shadow-sm hover:bg-[#05b34c] hover:-translate-y-0.5 transition-all text-sm"
+                  >
+                    <MessageCircle className="w-5 h-5" /> 前往 LINE 觀看教學影片
+                  </a>
+                </div>
+                
+                <div className="border-t border-orange-200 pt-3">
+                  <p className="text-sm text-gray-800 font-black mb-1 flex items-center gap-1.5">
+                    <span className="bg-orange-500 text-white px-2 py-0.5 rounded-md text-xs shadow-sm">2</span> 再填表預約 👇
+                  </p>
+                  <p className="text-xs text-gray-600 font-bold leading-relaxed ml-7">
+                    看完想實戰、有疑問或需要專人陪練，請填寫下方表單讓店長為您安排！
+                  </p>
+                </div>
+              </div>
               
               {reserveSuccess ? (
                 <div className="bg-green-50 p-4 rounded-xl text-center border border-green-200 shadow-inner animate-pulse">
@@ -619,7 +644,6 @@ export default function App() {
                     </div>
                   </div>
                   <div>
-                    {/* 💡 這裡將原本的 您的稱呼/暱稱 改成 您的 LINE 名稱 */}
                     <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1"><User className="w-3.5 h-3.5"/> 您的 LINE 名稱</label>
                     <input required type="text" placeholder="請輸入您在 LINE 上的顯示名稱" value={reserveForm.name} onChange={(e) => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
                   </div>
@@ -972,7 +996,6 @@ export default function App() {
                           </div>
                           
                           <div className="grid grid-cols-2 gap-2 text-sm">
-                            {/* 💡 這裡將原本的 暱稱 改成 LINE 名稱 */}
                             <div className="text-gray-800 font-black"><span className="text-gray-500 text-xs block">👤 LINE 名稱</span>{res.name}</div>
                             <div className="text-gray-800 font-black"><span className="text-gray-500 text-xs block">📱 聯絡方式</span>{res.contact}</div>
                             <div className="text-gray-800 font-black col-span-2"><span className="text-gray-500 text-xs block">🗓️ 期望時間</span>{res.date} {res.time}</div>
