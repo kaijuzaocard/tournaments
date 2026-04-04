@@ -24,8 +24,8 @@ try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  // 將測試環境產生的 appId 內的斜線替換掉，確保 Firestore 集合路徑層級正確
-  appId = typeof __app_id !== 'undefined' ? String(__app_id).replace(/\//g, '-') : 'kaijuzaocard-main';
+  // 💡 特助修復：嚴格遵守 Firebase 原始 appId，不做任何字元替換以防路徑不匹配
+  appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
 } catch (error) {
   console.error("Firebase initialization error:", error);
 }
@@ -74,6 +74,9 @@ export default function App() {
     description: '',
     image: ''
   });
+  
+  // 新增賽事成功提示狀態
+  const [addSuccess, setAddSuccess] = useState(false);
 
   // ==========================================
   // 認證與資料讀取
@@ -196,9 +199,17 @@ export default function App() {
       
       await Promise.all(promises);
 
-      // 發布成功後清空表單，並將場次重置為 1 個
+      // 發布成功後清空表單，並將場次重置為 1 個 (保留 gameType 與 fee)
       setFormData({ ...formData, title: '', description: '', image: '' });
       setSchedules([{ date: '', time: '19:00' }]);
+      
+      // 徹底清空圖片上傳區塊的 DOM 紀錄，避免二次上傳卡住
+      const fileInput = document.getElementById('promo-image-upload');
+      if (fileInput) fileInput.value = '';
+
+      // 觸發成功動畫提示
+      setAddSuccess(true);
+      setTimeout(() => setAddSuccess(false), 3000);
     } catch (error) { 
       console.error("Error adding document: ", error); 
     }
@@ -283,7 +294,6 @@ export default function App() {
     if (!text) return null;
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     
-    // 💡 特助修復：拔除容易產生記憶 Bug 的 test()，改用最暴力的 startsWith 來判斷！
     return text.split(urlRegex).map((part, i) => 
       (part.startsWith('http://') || part.startsWith('https://')) ? (
         <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline break-all font-black" onClick={(e) => e.stopPropagation()}>
@@ -638,10 +648,17 @@ export default function App() {
                 </div>
 
                 {/* 新增賽事區塊 */}
-                <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200">
-                  <h2 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2">
-                    <Plus className="w-6 h-6 text-orange-500" /> 新增賽事情報
-                  </h2>
+                <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 relative overflow-hidden">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-black text-gray-800 flex items-center gap-2">
+                      <Plus className="w-6 h-6 text-orange-500" /> 新增賽事情報
+                    </h2>
+                    {addSuccess && (
+                      <span className="text-sm font-bold text-green-700 bg-green-100 border border-green-300 px-3 py-1 rounded-full animate-pulse flex items-center gap-1 shadow-sm">
+                        <CheckCircle2 className="w-4 h-4" /> 發布成功！
+                      </span>
+                    )}
+                  </div>
 
                   <form onSubmit={handleAddTournament} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
@@ -675,12 +692,12 @@ export default function App() {
                           <div key={index} className="flex gap-2 items-center">
                             <input required type="date" className="flex-1 p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={sch.date} onChange={(e) => {
                               const newSch = [...schedules];
-                              newSch[index].date = e.target.value;
+                              newSch[index] = { ...newSch[index], date: e.target.value };
                               setSchedules(newSch);
                             }} />
                             <input required type="time" className="w-28 p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={sch.time} onChange={(e) => {
                               const newSch = [...schedules];
-                              newSch[index].time = e.target.value;
+                              newSch[index] = { ...newSch[index], time: e.target.value };
                               setSchedules(newSch);
                             }} />
                             {schedules.length > 1 && (
@@ -746,7 +763,7 @@ export default function App() {
                       <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
                         <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖
                       </label>
-                      <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
+                      <input id="promo-image-upload" type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
                       {formData.image && (
                         <div className="mt-3 relative inline-block">
                           <img src={formData.image} alt="宣傳圖預覽" className="h-32 w-auto rounded-lg border border-gray-200 shadow-sm" />
