@@ -943,15 +943,40 @@ export default function App() {
                         <p className="text-sm text-gray-400 font-bold bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">這天目前沒有安排賽事喔！</p>
                       ) : (
                         tournaments.filter(t => t.date === adminSelectedDate).map(t => (
-                          <div key={t.id} className="p-3 bg-white shadow-sm rounded-xl border border-red-100 flex justify-between items-center transition-colors hover:border-red-300">
-                            <div>
-                              <GameBadge type={t.gameType} />
-                              <div className="font-black text-gray-800 mt-1">{t.title}</div>
-                              <div className="text-xs text-gray-500 font-bold">{t.time} 開打</div>
+                          <div key={t.id} className="p-3 bg-white shadow-sm rounded-xl border border-red-100 flex flex-col transition-colors hover:border-red-300">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <GameBadge type={t.gameType} />
+                                <div className="font-black text-gray-800 mt-1">{t.title}</div>
+                                <div className="text-xs text-gray-500 font-bold">{t.time} 開打</div>
+                              </div>
+                              <button onClick={() => handleDelete(t.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0 ml-2 border border-transparent hover:border-red-200" title="刪除賽事">
+                                <Trash2 className="w-5 h-5" />
+                              </button>
                             </div>
-                            <button onClick={() => handleDelete(t.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0 ml-2 border border-transparent hover:border-red-200" title="刪除賽事">
-                              <Trash2 className="w-5 h-5" />
-                            </button>
+                            
+                            {/* 💡 後台管理：加入智慧收合按鈕與圖文內容防呆確認 */}
+                            {(t.image || t.description) && (
+                              <div className="mt-2">
+                                <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
+                                  {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
+                                </button>
+                                {expandedNotes[t.id] && (
+                                  <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
+                                    {t.image && (
+                                      <div className="mb-2 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
+                                        <img src={t.image} alt={t.title} className="w-full h-auto object-cover" />
+                                      </div>
+                                    )}
+                                    {t.description && (
+                                      <div className="text-xs text-gray-600 whitespace-pre-line">
+                                        {renderTextWithLinks(t.description)}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))
                       )}
