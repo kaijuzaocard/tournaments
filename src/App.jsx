@@ -78,14 +78,12 @@ export default function App() {
   // 新增賽事成功提示狀態
   const [addSuccess, setAddSuccess] = useState(false);
 
-  // 💡 特助升級：備註文字的收合與展開狀態管理
+  // 💡 特助升級：一鍵收合宣傳圖與備註文字狀態管理
   const [expandedNotes, setExpandedNotes] = useState({});
   const toggleNote = (e, id) => {
     e.stopPropagation();
     setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
   };
-  // 判斷字數是否超過 50 字，或是超過 2 行
-  const isTextLong = (text) => text.length > 50 || (text.match(/\n/g) || []).length >= 2;
 
   // ==========================================
   // 認證與資料讀取
@@ -448,22 +446,26 @@ export default function App() {
                             <div className="text-gray-500 text-sm font-bold">{t.time} 開打</div>
                           </div>
                         </div>
-                        {t.image && (
-                          <div className="mb-3 rounded-lg overflow-hidden border border-gray-100 shadow-sm"><img src={t.image} alt={t.title} className="w-full h-auto object-cover" /></div>
-                        )}
                         <h3 className="text-lg font-black text-gray-800 mb-2">{t.title}</h3>
                         <div className="flex items-center gap-2 text-sm text-gray-600 mb-3 bg-gray-50 p-2 rounded-lg">
                           <Zap className="w-4 h-4 text-yellow-500" /><span className="font-bold">報名費：{t.fee}</span>
                         </div>
-                        {t.description && (
-                          <div className="border-t border-gray-100 pt-3">
-                            <div className={`text-sm text-gray-600 whitespace-pre-line overflow-hidden transition-all ${expandedNotes[t.id] ? '' : 'line-clamp-2'}`}>
-                              {renderTextWithLinks(t.description)}
-                            </div>
-                            {isTextLong(t.description) && (
-                              <button onClick={(e) => toggleNote(e, t.id)} className="text-xs font-bold text-orange-500 hover:text-orange-700 mt-1.5 flex items-center gap-1 transition-colors">
-                                {expandedNotes[t.id] ? '▲ 收起備註' : '▼ 展開備註'}
-                              </button>
+                        
+                        {/* 💡 列表模式：加入智慧收合按鈕與圖文內容 */}
+                        {(t.image || t.description) && (
+                          <div className="mt-1">
+                            <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2 rounded-xl flex justify-center items-center gap-1 transition-colors border border-orange-100">
+                              {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
+                            </button>
+                            {expandedNotes[t.id] && (
+                              <div className="mt-3 pt-3 border-t border-gray-100 transition-opacity duration-300">
+                                {t.image && (
+                                  <div className="mb-3 rounded-lg overflow-hidden border border-gray-100 shadow-sm"><img src={t.image} alt={t.title} className="w-full h-auto object-cover" /></div>
+                                )}
+                                {t.description && (
+                                  <div className="text-sm text-gray-600 whitespace-pre-line">{renderTextWithLinks(t.description)}</div>
+                                )}
+                              </div>
                             )}
                           </div>
                         )}
@@ -520,7 +522,7 @@ export default function App() {
                   })()}
                 </div>
 
-                {/* 💡 特助升級：行事曆展開模式，支援顯示圖片與說明啦！ */}
+                {/* 行事曆下方詳細賽程列表 */}
                 {selectedDate && (
                   <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
                     <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2 mb-2">
@@ -542,23 +544,25 @@ export default function App() {
                             </div>
                           </div>
                           
-                          {/* 行事曆模式：加入宣傳圖 */}
-                          {t.image && (
-                            <div className="mt-2 mb-2 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
-                              <img src={t.image} alt={t.title} className="w-full h-auto object-cover" />
-                            </div>
-                          )}
-                          
-                          {/* 行事曆模式：加入備註說明 (支援智慧收合) */}
-                          {t.description && (
-                            <div className="border-t border-gray-100 pt-2 mt-1">
-                              <div className={`text-xs text-gray-600 whitespace-pre-line overflow-hidden transition-all ${expandedNotes[t.id] ? '' : 'line-clamp-2'}`}>
-                                {renderTextWithLinks(t.description)}
-                              </div>
-                              {isTextLong(t.description) && (
-                                <button onClick={(e) => toggleNote(e, t.id)} className="text-xs font-bold text-orange-500 hover:text-orange-700 mt-1.5 flex items-center gap-1 transition-colors">
-                                  {expandedNotes[t.id] ? '▲ 收起備註' : '▼ 展開備註'}
-                                </button>
+                          {/* 💡 行事曆模式：加入智慧收合按鈕與圖文內容 */}
+                          {(t.image || t.description) && (
+                            <div className="mt-2">
+                              <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
+                                {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
+                              </button>
+                              {expandedNotes[t.id] && (
+                                <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
+                                  {t.image && (
+                                    <div className="mb-2 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
+                                      <img src={t.image} alt={t.title} className="w-full h-auto object-cover" />
+                                    </div>
+                                  )}
+                                  {t.description && (
+                                    <div className="text-xs text-gray-600 whitespace-pre-line">
+                                      {renderTextWithLinks(t.description)}
+                                    </div>
+                                  )}
+                                </div>
                               )}
                             </div>
                           )}
