@@ -24,7 +24,7 @@ try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  // 💡 特助修復：嚴格遵守 Firebase 原始 appId，不做任何字元替換以防路徑不匹配
+  // 嚴格遵守 Firebase 原始 appId
   appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
 } catch (error) {
   console.error("Firebase initialization error:", error);
@@ -77,6 +77,15 @@ export default function App() {
   
   // 新增賽事成功提示狀態
   const [addSuccess, setAddSuccess] = useState(false);
+
+  // 💡 特助升級：備註文字的收合與展開狀態管理
+  const [expandedNotes, setExpandedNotes] = useState({});
+  const toggleNote = (e, id) => {
+    e.stopPropagation();
+    setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+  // 判斷字數是否超過 50 字，或是超過 2 行
+  const isTextLong = (text) => text.length > 50 || (text.match(/\n/g) || []).length >= 2;
 
   // ==========================================
   // 認證與資料讀取
@@ -165,11 +174,44 @@ export default function App() {
     }
   };
 
+  // 💡 特助升級：超強圖片壓縮機！突破 1MB 限制！
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => setFormData({ ...formData, image: reader.result });
+      reader.onloadend = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 800; // 限制最大寬度
+          const MAX_HEIGHT = 800; // 限制最大高度
+          let width = img.width;
+          let height = img.height;
+
+          // 等比例計算縮放
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // 壓縮成 JPEG 格式，品質設定為 0.7 (大幅縮小體積且畫質夠用)
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          setFormData({ ...formData, image: compressedDataUrl });
+        };
+        img.src = event.target.result;
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -414,7 +456,16 @@ export default function App() {
                           <Zap className="w-4 h-4 text-yellow-500" /><span className="font-bold">報名費：{t.fee}</span>
                         </div>
                         {t.description && (
-                          <p className="text-sm text-gray-600 whitespace-pre-line border-t border-gray-100 pt-3">{renderTextWithLinks(t.description)}</p>
+                          <div className="border-t border-gray-100 pt-3">
+                            <div className={`text-sm text-gray-600 whitespace-pre-line overflow-hidden transition-all ${expandedNotes[t.id] ? '' : 'line-clamp-2'}`}>
+                              {renderTextWithLinks(t.description)}
+                            </div>
+                            {isTextLong(t.description) && (
+                              <button onClick={(e) => toggleNote(e, t.id)} className="text-xs font-bold text-orange-500 hover:text-orange-700 mt-1.5 flex items-center gap-1 transition-colors">
+                                {expandedNotes[t.id] ? '▲ 收起備註' : '▼ 展開備註'}
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     ))}
@@ -469,24 +520,48 @@ export default function App() {
                   })()}
                 </div>
 
+                {/* 💡 特助升級：行事曆展開模式，支援顯示圖片與說明啦！ */}
                 {selectedDate && (
-                  <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
-                    <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2">
-                      <Calendar className="w-4 h-4 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事
+                  <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
+                    <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2 mb-2">
+                      <Calendar className="w-4 h-4 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事情報
                     </h4>
                     {tournaments.filter(t => t.date === selectedDate && (playerFilter === 'All' || t.gameType === playerFilter)).length === 0 ? (
                       <p className="text-sm text-gray-400 font-bold bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">這天目前沒有安排賽事喔！</p>
                     ) : (
                       tournaments.filter(t => t.date === selectedDate && (playerFilter === 'All' || t.gameType === playerFilter)).map(t => (
-                        <div key={t.id} className="p-3 bg-white shadow-sm rounded-xl border border-gray-200 flex justify-between items-center transition-transform hover:-translate-y-0.5">
-                          <div>
-                            <GameBadge type={t.gameType} />
-                            <div className="font-black text-gray-800 mt-1">{t.title}</div>
-                            <div className="text-xs text-gray-500 font-bold">{t.time} 開打</div>
+                        <div key={t.id} className="p-4 bg-white shadow-md rounded-xl border-l-4 border-l-orange-500 flex flex-col transition-transform hover:-translate-y-0.5">
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <GameBadge type={t.gameType} />
+                              <div className="font-black text-gray-800 mt-1.5 text-lg leading-tight">{t.title}</div>
+                              <div className="text-xs text-gray-500 font-bold mt-1 flex items-center gap-1"><Clock className="w-3 h-3"/> {t.time} 開打</div>
+                            </div>
+                            <div className="text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-1 rounded-lg whitespace-nowrap ml-2 shadow-sm">
+                              {t.fee}
+                            </div>
                           </div>
-                          <div className="text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-1 rounded-lg">
-                            {t.fee}
-                          </div>
+                          
+                          {/* 行事曆模式：加入宣傳圖 */}
+                          {t.image && (
+                            <div className="mt-2 mb-2 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
+                              <img src={t.image} alt={t.title} className="w-full h-auto object-cover" />
+                            </div>
+                          )}
+                          
+                          {/* 行事曆模式：加入備註說明 (支援智慧收合) */}
+                          {t.description && (
+                            <div className="border-t border-gray-100 pt-2 mt-1">
+                              <div className={`text-xs text-gray-600 whitespace-pre-line overflow-hidden transition-all ${expandedNotes[t.id] ? '' : 'line-clamp-2'}`}>
+                                {renderTextWithLinks(t.description)}
+                              </div>
+                              {isTextLong(t.description) && (
+                                <button onClick={(e) => toggleNote(e, t.id)} className="text-xs font-bold text-orange-500 hover:text-orange-700 mt-1.5 flex items-center gap-1 transition-colors">
+                                  {expandedNotes[t.id] ? '▲ 收起備註' : '▼ 展開備註'}
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))
                     )}
