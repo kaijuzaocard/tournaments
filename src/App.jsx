@@ -78,7 +78,7 @@ export default function App() {
   // 新增賽事成功提示狀態
   const [addSuccess, setAddSuccess] = useState(false);
 
-  // 💡 特助升級：一鍵收合宣傳圖與備註文字狀態管理
+  // 💡 一鍵收合宣傳圖與備註文字狀態管理
   const [expandedNotes, setExpandedNotes] = useState({});
   const toggleNote = (e, id) => {
     e.stopPropagation();
@@ -330,6 +330,18 @@ export default function App() {
   // ==========================================
   // UI 輔助元件
   // ==========================================
+  
+  // 💡 特助升級：自動日期格式轉換器 (把 YYYY-MM-DD 轉成 MM-DD(星期))
+  const formatEventDate = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    const days = ['日', '一', '二', '三', '四', '五', '六'];
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dayOfWeek = days[date.getDay()];
+    return `${month}-${day}(${dayOfWeek})`;
+  };
+
   const renderTextWithLinks = (text) => {
     if (!text) return null;
     const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -442,7 +454,8 @@ export default function App() {
                         <div className="flex justify-between items-start mb-3">
                           <GameBadge type={t.gameType} />
                           <div className="text-right">
-                            <div className="text-orange-600 font-black text-lg">{t.date.slice(5)}</div>
+                            {/* 💡 這裡加上了自動換算星期的魔法 */}
+                            <div className="text-orange-600 font-black text-lg">{formatEventDate(t.date)}</div>
                             <div className="text-gray-500 text-sm font-bold">{t.time} 開打</div>
                           </div>
                         </div>
@@ -525,8 +538,9 @@ export default function App() {
                 {/* 行事曆下方詳細賽程列表 */}
                 {selectedDate && (
                   <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
+                    {/* 💡 這裡加上了自動換算星期的魔法 */}
                     <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2 mb-2">
-                      <Calendar className="w-4 h-4 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事情報
+                      <Calendar className="w-4 h-4 text-orange-500" /> {formatEventDate(selectedDate)} 賽事情報
                     </h4>
                     {tournaments.filter(t => t.date === selectedDate && (playerFilter === 'All' || t.gameType === playerFilter)).length === 0 ? (
                       <p className="text-sm text-gray-400 font-bold bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">這天目前沒有安排賽事喔！</p>
@@ -581,7 +595,7 @@ export default function App() {
                 <BookOpen className="w-6 h-6 text-orange-500" /> 預約新手教學 🎓
               </h2>
               
-              {/* 💡 特助優化：更流暢的「先看影片 ➔ 再預約實戰」動線 */}
+              {/* 更流暢的「先看影片 ➔ 再預約實戰」動線 */}
               <div className="mb-6 space-y-4 bg-orange-50 p-4 rounded-xl border border-orange-100 shadow-sm">
                 <div>
                   <p className="text-sm text-gray-800 font-black mb-2 flex items-center gap-1.5">
@@ -936,8 +950,9 @@ export default function App() {
 
                   {adminSelectedDate ? (
                     <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+                      {/* 💡 這裡加上了自動換算星期的魔法 */}
                       <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-orange-500" /> {adminSelectedDate.replace(/-/g, '/')} 管理清單
+                        <Calendar className="w-4 h-4 text-orange-500" /> {formatEventDate(adminSelectedDate)} 管理清單
                       </h4>
                       {tournaments.filter(t => t.date === adminSelectedDate).length === 0 ? (
                         <p className="text-sm text-gray-400 font-bold bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">這天目前沒有安排賽事喔！</p>
@@ -955,7 +970,7 @@ export default function App() {
                               </button>
                             </div>
                             
-                            {/* 💡 後台管理：加入智慧收合按鈕與圖文內容防呆確認 */}
+                            {/* 後台管理：加入智慧收合按鈕與圖文內容防呆確認 */}
                             {(t.image || t.description) && (
                               <div className="mt-2">
                                 <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
