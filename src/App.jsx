@@ -403,15 +403,22 @@ export default function App() {
 
             <div className="flex flex-col gap-3">
               
-              <div className="relative flex items-center">
+              {/* 💡 特助升級：自訂 CSS 徹底隱藏醜醜的捲動條，讓畫面更像 APP */}
+              <style>{`
+                .hide-scrollbar::-webkit-scrollbar { display: none; }
+                .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+              `}</style>
+
+              {/* 💡 特助升級：改為排排站 (Flex) 佈局，按鈕與文字絕對不重疊！ */}
+              <div className="flex items-center gap-1 w-full">
                 <button 
                   onClick={() => scrollCategories(-200)} 
-                  className="absolute left-0 z-10 flex items-center justify-center w-7 h-7 bg-white/95 shadow-[2px_0_8px_rgba(0,0,0,0.1)] rounded-full text-orange-600 border border-gray-100 hover:bg-orange-50 transition-all"
+                  className="flex-shrink-0 flex items-center justify-center w-8 h-8 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 hover:bg-orange-50 transition-transform active:scale-95"
                 >
-                  <ChevronLeft className="w-4 h-4 -ml-0.5" />
+                  <ChevronLeft className="w-5 h-5 -ml-0.5" />
                 </button>
                 
-                <div ref={categoryScrollRef} className="flex gap-2 overflow-x-auto pb-2 pt-1 px-8 scrollbar-hide w-full scroll-smooth">
+                <div ref={categoryScrollRef} className="flex-1 flex gap-2 overflow-x-auto pb-2 pt-1 px-1 hide-scrollbar scroll-smooth">
                   {[{ id: 'All', label: '全部', color: 'bg-white border border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color || 'bg-gray-200' }))].map(cat => {
                     const isSelected = playerFilters.includes(cat.id);
                     return (
@@ -430,9 +437,9 @@ export default function App() {
 
                 <button 
                   onClick={() => scrollCategories(200)} 
-                  className="absolute right-0 z-10 flex items-center justify-center w-7 h-7 bg-white/95 shadow-[-2px_0_8px_rgba(0,0,0,0.1)] rounded-full text-orange-600 border border-gray-100 hover:bg-orange-50 transition-all"
+                  className="flex-shrink-0 flex items-center justify-center w-8 h-8 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 hover:bg-orange-50 transition-transform active:scale-95"
                 >
-                  <ChevronRight className="w-4 h-4 -mr-0.5" />
+                  <ChevronRight className="w-5 h-5 -mr-0.5" />
                 </button>
               </div>
 
@@ -459,7 +466,8 @@ export default function App() {
                     未來 14 天內沒有即將到來的賽事喔！<br/>可以切換到「行事曆」查看更久之後的安排！😆
                   </div>
                 ) : (
-                  <div className="space-y-4 max-h-[55vh] overflow-y-auto px-1 py-1 overscroll-contain scrollbar-hide">
+                  <div className="space-y-4 max-h-[55vh] overflow-y-auto px-1 py-1 overscroll-contain hide-scrollbar">
+                    {/* 💡 修復了註解位置造成的渲染錯誤，這裡也順便把垂直捲動條隱藏，畫面更乾淨 */}
                     {listTournaments.map(t => (
                       <div key={t.id} className="bg-white rounded-2xl p-5 shadow-md border-l-4 border-orange-500 relative overflow-hidden transition-transform hover:-translate-y-1">
                         <div className="flex justify-between items-start mb-3">
