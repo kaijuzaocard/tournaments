@@ -326,7 +326,7 @@ export default function App() {
   const formatEventDate = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
-    if (isNaN(date.getTime())) return dateString; // 💡 防呆：如果日期異常，直接回傳原字串避免崩潰
+    if (isNaN(date.getTime())) return dateString; 
     const days = ['日', '一', '二', '三', '四', '五', '六'];
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
@@ -403,13 +403,20 @@ export default function App() {
 
             <div className="flex flex-col gap-3">
               
-              {/* 💡 特助升級：自訂 CSS 徹底隱藏醜醜的捲動條，讓畫面更像 APP */}
+              {/* 💡 特助升級：自訂 CSS 徹底隱藏醜醜的捲動條 */}
               <style>{`
                 .hide-scrollbar::-webkit-scrollbar { display: none; }
                 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
               `}</style>
 
-              {/* 💡 特助升級：改為排排站 (Flex) 佈局，按鈕與文字絕對不重疊！ */}
+              {/* 💡 特助加碼：多重篩選貼心小提醒 */}
+              <div className="px-1 mb-[-4px]">
+                <span className="text-[11px] font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-sm">
+                  💡 貼心小提醒：分類按鈕可以「多重點擊」同時篩選喔！
+                </span>
+              </div>
+
+              {/* 改為排排站 (Flex) 佈局，按鈕與文字絕對不重疊！ */}
               <div className="flex items-center gap-1 w-full">
                 <button 
                   onClick={() => scrollCategories(-200)} 
@@ -467,7 +474,6 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-4 max-h-[55vh] overflow-y-auto px-1 py-1 overscroll-contain hide-scrollbar">
-                    {/* 💡 修復了註解位置造成的渲染錯誤，這裡也順便把垂直捲動條隱藏，畫面更乾淨 */}
                     {listTournaments.map(t => (
                       <div key={t.id} className="bg-white rounded-2xl p-5 shadow-md border-l-4 border-orange-500 relative overflow-hidden transition-transform hover:-translate-y-1">
                         <div className="flex justify-between items-start mb-3">
@@ -886,7 +892,7 @@ export default function App() {
                       <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
                         <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖
                       </label>
-                      <input id="promo-image-upload" type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
+                      <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
                       {formData.image && (
                         <div className="mt-3 relative inline-block">
                           <img src={formData.image} alt="宣傳圖預覽" className="h-32 w-auto rounded-lg border border-gray-200 shadow-sm" />
