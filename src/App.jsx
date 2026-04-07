@@ -23,7 +23,8 @@ try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
+  // 💡 特助終極修復：強制將斜線替換為短橫線，確保資料庫路徑永遠保持合法的 5 段 (奇數段)
+  appId = typeof __app_id !== 'undefined' ? String(__app_id).replace(/\//g, '-') : 'kaijuzaocard-main';
 } catch (error) {
   console.error("Firebase initialization error:", error);
 }
@@ -39,7 +40,7 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [pwdError, setPwdError] = useState(false);
 
-  // 💡 特助升級：玩家看板狀態改為「陣列」以支援複選功能
+  // 玩家看板狀態改為「陣列」以支援複選功能
   const [playerFilters, setPlayerFilters] = useState(['All']);
   const [viewMode, setViewMode] = useState('list'); 
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -83,7 +84,7 @@ export default function App() {
     }
   };
 
-  // 💡 特助升級：智慧處理複選點擊邏輯
+  // 智慧處理複選點擊邏輯
   const togglePlayerFilter = (categoryId) => {
     if (categoryId === 'All') {
       setPlayerFilters(['All']);
@@ -91,17 +92,12 @@ export default function App() {
     }
 
     setPlayerFilters(prev => {
-      // 移除 'All' 狀態
       let newFilters = prev.filter(id => id !== 'All');
-
       if (newFilters.includes(categoryId)) {
-        // 如果已經選了就取消選擇
         newFilters = newFilters.filter(id => id !== categoryId);
-        // 如果全取消了，自動回到 'All'
         if (newFilters.length === 0) return ['All'];
         return newFilters;
       } else {
-        // 加上新選擇的類別
         return [...newFilters, categoryId];
       }
     });
@@ -136,39 +132,49 @@ export default function App() {
   useEffect(() => {
     if (!user || !db) return;
 
-    const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
-    const unsubTournaments = onSnapshot(tournamentsRef, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
-      setTournaments(data);
+    // 💡 特助升級：全面加上防護網 (try-catch)，避免資料庫路徑異常時造成畫面崩潰
+    let unsubTournaments, unsubCategories, unsubPresets, unsubRes;
+
+    try {
+      const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
+      unsubTournaments = onSnapshot(tournamentsRef, (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
+        setTournaments(data);
+        setIsLoading(false);
+      }, (error) => {
+        console.error("Firestore error:", error);
+        setIsLoading(false);
+      });
+
+      const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'game_categories');
+      unsubCategories = onSnapshot(categoriesRef, (snapshot) => {
+        setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }, (error) => console.error("Categories fetch error:", error));
+
+      const presetsRef = collection(db, 'artifacts', appId, 'public', 'data', 'note_presets');
+      unsubPresets = onSnapshot(presetsRef, (snapshot) => {
+        setNotePresets(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }, (error) => console.error("Presets fetch error:", error));
+
+      const resRef = collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations');
+      unsubRes = onSnapshot(resRef, (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        setReservations(data);
+      }, (error) => console.error("Reservations fetch error:", error));
+
+    } catch (error) {
+      console.error("Database connection error:", error);
       setIsLoading(false);
-    }, (error) => {
-      console.error("Firestore error:", error);
-      setIsLoading(false);
-    });
-
-    const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'game_categories');
-    const unsubCategories = onSnapshot(categoriesRef, (snapshot) => {
-      setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (error) => console.error("Categories fetch error:", error));
-
-    const presetsRef = collection(db, 'artifacts', appId, 'public', 'data', 'note_presets');
-    const unsubPresets = onSnapshot(presetsRef, (snapshot) => {
-      setNotePresets(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (error) => console.error("Presets fetch error:", error));
-
-    const resRef = collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations');
-    const unsubRes = onSnapshot(resRef, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      setReservations(data);
-    }, (error) => console.error("Reservations fetch error:", error));
+    }
 
     return () => {
-      unsubTournaments();
-      unsubCategories();
-      unsubPresets();
-      unsubRes();
+      // 💡 安全關閉資料庫連線，防止死當
+      if (unsubTournaments) unsubTournaments();
+      if (unsubCategories) unsubCategories();
+      if (unsubPresets) unsubPresets();
+      if (unsubRes) unsubRes();
     };
   }, [user]);
 
@@ -320,6 +326,7 @@ export default function App() {
   const formatEventDate = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString; // 💡 防呆：如果日期異常，直接回傳原字串避免崩潰
     const days = ['日', '一', '二', '三', '四', '五', '六'];
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
@@ -406,12 +413,10 @@ export default function App() {
                 
                 <div ref={categoryScrollRef} className="flex gap-2 overflow-x-auto pb-2 pt-1 px-8 scrollbar-hide w-full scroll-smooth">
                   {[{ id: 'All', label: '全部', color: 'bg-white border border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color || 'bg-gray-200' }))].map(cat => {
-                    // 💡 判斷是否在陣列中
                     const isSelected = playerFilters.includes(cat.id);
                     return (
                       <button
                         key={cat.id} 
-                        // 💡 綁定複選切換邏輯
                         onClick={() => togglePlayerFilter(cat.id)}
                         className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-black transition-all shadow-sm text-black ${cat.color} ${
                           isSelected ? 'ring-2 ring-black ring-offset-1 scale-105 opacity-100' : 'opacity-60 hover:opacity-100'
@@ -446,7 +451,6 @@ export default function App() {
 
                 const listTournaments = tournaments.filter(t => {
                   const eventDate = new Date(`${t.date}T${t.time}`);
-                  // 💡 列表過濾：判斷是否選擇了全部，或是該賽事種類在目前選擇的陣列中
                   return eventDate >= now && eventDate <= nextWeek && (playerFilters.includes('All') || playerFilters.includes(t.gameType));
                 });
 
@@ -513,7 +517,6 @@ export default function App() {
                     for (let i = 0; i < firstDay; i++) cells.push(<div key={`empty-${i}`} className="h-10"></div>);
                     for (let d = 1; d <= daysInMonth; d++) {
                       const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                      // 💡 行事曆過濾點點邏輯
                       const dayEvents = tournaments.filter(t => t.date === dateString && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
                       const isSelected = selectedDate === dateString;
                       const today = new Date();
@@ -547,7 +550,6 @@ export default function App() {
                     <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2 mb-2">
                       <Calendar className="w-4 h-4 text-orange-500" /> {formatEventDate(selectedDate)} 賽事情報
                     </h4>
-                    {/* 💡 行事曆過濾詳情邏輯 */}
                     {tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).length === 0 ? (
                       <p className="text-sm text-gray-400 font-bold bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">這天目前沒有安排賽事喔！</p>
                     ) : (
@@ -794,14 +796,36 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-600 mb-1">日期</label>
-                        <input required type="date" className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} />
+                    <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 shadow-inner">
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="block text-xs font-black text-orange-800">🗓️ 開賽日期與時間 (可一次新增多筆)</label>
+                        <button type="button" onClick={() => setSchedules([...schedules, { date: '', time: '19:00' }])} className="text-xs font-bold text-orange-600 bg-white px-2 py-1 rounded shadow-sm border border-orange-200 hover:bg-orange-100 flex items-center gap-1 transition-colors">
+                          <Plus className="w-3 h-3" /> 新增場次
+                        </button>
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-600 mb-1">時間</label>
-                        <input required type="time" className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={formData.time} onChange={(e) => setFormData({...formData, time: e.target.value})} />
+                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        {schedules.map((sch, index) => (
+                          <div key={index} className="flex gap-2 items-center">
+                            <input required type="date" className="flex-1 p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={sch.date} onChange={(e) => {
+                              const newSch = [...schedules];
+                              newSch[index] = { ...newSch[index], date: e.target.value };
+                              setSchedules(newSch);
+                            }} />
+                            <input required type="time" className="w-28 p-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={sch.time} onChange={(e) => {
+                              const newSch = [...schedules];
+                              newSch[index] = { ...newSch[index], time: e.target.value };
+                              setSchedules(newSch);
+                            }} />
+                            {schedules.length > 1 && (
+                              <button type="button" onClick={() => {
+                                const newSch = schedules.filter((_, i) => i !== index);
+                                setSchedules(newSch);
+                              }} className="p-2 text-red-400 hover:text-red-600 transition-colors bg-white rounded-lg border border-red-100 hover:border-red-200 shadow-sm" title="移除此場次">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
 
@@ -810,7 +834,6 @@ export default function App() {
                       <input required type="text" placeholder="例如：200元 或 買2包" className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold" value={formData.fee} onChange={(e) => setFormData({...formData, fee: e.target.value})} />
                     </div>
 
-                    {/* 備註與快捷模板管理區 */}
                     <div>
                       <label className="block text-xs font-black text-gray-600 mb-1">備註</label>
                       
@@ -855,7 +878,7 @@ export default function App() {
                       <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
                         <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖
                       </label>
-                      <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
+                      <input id="promo-image-upload" type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
                       {formData.image && (
                         <div className="mt-3 relative inline-block">
                           <img src={formData.image} alt="宣傳圖預覽" className="h-32 w-auto rounded-lg border border-gray-200 shadow-sm" />
