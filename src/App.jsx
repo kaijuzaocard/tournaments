@@ -23,7 +23,6 @@ try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  // 💡 特助終極修復：強制將斜線替換為短橫線，確保資料庫路徑永遠保持合法的 5 段 (奇數段)
   appId = typeof __app_id !== 'undefined' ? String(__app_id).replace(/\//g, '-') : 'kaijuzaocard-main';
 } catch (error) {
   console.error("Firebase initialization error:", error);
@@ -132,7 +131,6 @@ export default function App() {
   useEffect(() => {
     if (!user || !db) return;
 
-    // 💡 特助升級：全面加上防護網 (try-catch)，避免資料庫路徑異常時造成畫面崩潰
     let unsubTournaments, unsubCategories, unsubPresets, unsubRes;
 
     try {
@@ -170,7 +168,6 @@ export default function App() {
     }
 
     return () => {
-      // 💡 安全關閉資料庫連線，防止死當
       if (unsubTournaments) unsubTournaments();
       if (unsubCategories) unsubCategories();
       if (unsubPresets) unsubPresets();
@@ -403,20 +400,24 @@ export default function App() {
 
             <div className="flex flex-col gap-3">
               
-              {/* 💡 特助升級：自訂 CSS 徹底隱藏醜醜的捲動條 */}
               <style>{`
                 .hide-scrollbar::-webkit-scrollbar { display: none; }
                 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
               `}</style>
 
-              {/* 💡 特助加碼：多重篩選貼心小提醒 */}
-              <div className="px-1 mb-[-4px]">
-                <span className="text-[11px] font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-sm">
-                  💡 貼心小提醒：分類按鈕可以「多重點擊」同時篩選喔！
+              {/* 💡 特助加碼：雙重導航小標籤，帶有自動下滑功能 */}
+              <div className="px-1 mb-[-4px] flex flex-wrap gap-2">
+                <span className="text-[11px] font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm">
+                  💡 分類按鈕可「多選」篩選！
                 </span>
+                <button 
+                  onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })}
+                  className="text-[11px] font-bold text-white bg-orange-500 hover:bg-orange-600 border border-orange-600 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm transition-colors cursor-pointer active:scale-95"
+                >
+                  🎓 預約新手教學點我 👉
+                </button>
               </div>
 
-              {/* 改為排排站 (Flex) 佈局，按鈕與文字絕對不重疊！ */}
               <div className="flex items-center gap-1 w-full">
                 <button 
                   onClick={() => scrollCategories(-200)} 
@@ -610,7 +611,8 @@ export default function App() {
             )}
             
             {/* 新手教學預約區塊 */}
-            <div className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
+            {/* 💡 特助加碼：加上了 tutorial-section 這個 id，讓按鈕可以找得到地方滑下來 */}
+            <div id="tutorial-section" className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
               <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-3 py-1.5 rounded-bl-xl shadow-sm">新手專區</div>
               <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-4">
                 <BookOpen className="w-6 h-6 text-orange-500" /> 預約新手教學 🎓
@@ -892,7 +894,7 @@ export default function App() {
                       <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
                         <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖
                       </label>
-                      <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
+                      <input id="promo-image-upload" type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
                       {formData.image && (
                         <div className="mt-3 relative inline-block">
                           <img src={formData.image} alt="宣傳圖預覽" className="h-32 w-auto rounded-lg border border-gray-200 shadow-sm" />
