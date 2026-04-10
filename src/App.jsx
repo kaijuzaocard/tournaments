@@ -5,7 +5,7 @@ import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut } from 'lucide-react';
 
 // ==========================================
-// Firebase 初始化與設定 (自動判斷：測試環境 / 正式環境)
+// Firebase 初始化與設定
 // ==========================================
 let app, auth, db, appId;
 try {
@@ -34,48 +34,53 @@ export default function App() {
   const [currentView, setCurrentView] = useState('player'); 
   const [isLoading, setIsLoading] = useState(true);
 
-  // 店長後台密碼鎖狀態
   const [isAdminAuth, setIsAdminAuth] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [pwdError, setPwdError] = useState(false);
 
-  // 玩家看板狀態改為「陣列」以支援複選功能
   const [playerFilters, setPlayerFilters] = useState(['All']);
   const [viewMode, setViewMode] = useState('list'); 
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
 
-  // 後台專屬行事曆狀態
   const [adminMonth, setAdminMonth] = useState(new Date());
   const [adminSelectedDate, setAdminSelectedDate] = useState(null);
 
-  // 分類管理狀態
   const [categories, setCategories] = useState([]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryColor, setNewCategoryColor] = useState('bg-red-200');
 
-  // 快捷備註模板狀態
   const [notePresets, setNotePresets] = useState([]);
   const [newPresetTitle, setNewPresetTitle] = useState('');
 
-  // 新手教學預約狀態
   const [reservations, setReservations] = useState([]);
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
 
-  // 表單狀態
+  // 💡 特助升級：表單狀態改為陣列 images，支援多圖上傳
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
-  const [formData, setFormData] = useState({ gameType: 'UA', title: '', fee: '', description: '', image: '' });
+  const [formData, setFormData] = useState({ gameType: 'UA', title: '', fee: '', description: '', images: [] });
   const [addSuccess, setAddSuccess] = useState(false);
 
-  // 一鍵收合宣傳圖與備註文字狀態管理
   const [expandedNotes, setExpandedNotes] = useState({});
+  // 💡 特助升級：記錄每個賽事目前正在看第幾張幻燈片
+  const [currentImgIdx, setCurrentImgIdx] = useState({});
+
   const toggleNote = (e, id) => {
     e.stopPropagation();
     setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // 分類按鈕的左右滑動控制
+  const handlePrevImage = (e, tId, max) => {
+    e.stopPropagation();
+    setCurrentImgIdx(prev => ({ ...prev, [tId]: ((prev[tId] || 0) - 1 + max) % max }));
+  };
+
+  const handleNextImage = (e, tId, max) => {
+    e.stopPropagation();
+    setCurrentImgIdx(prev => ({ ...prev, [tId]: ((prev[tId] || 0) + 1) % max }));
+  };
+
   const categoryScrollRef = useRef(null);
   const scrollCategories = (offset) => {
     if (categoryScrollRef.current) {
@@ -83,13 +88,11 @@ export default function App() {
     }
   };
 
-  // 智慧處理複選點擊邏輯
   const togglePlayerFilter = (categoryId) => {
     if (categoryId === 'All') {
       setPlayerFilters(['All']);
       return;
     }
-
     setPlayerFilters(prev => {
       let newFilters = prev.filter(id => id !== 'All');
       if (newFilters.includes(categoryId)) {
@@ -103,11 +106,10 @@ export default function App() {
   };
 
   // ==========================================
-  // 認證與資料讀取
+  // 認證、資料讀取與【自動清潔工】
   // ==========================================
   useEffect(() => {
     if (!auth) return;
-
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -115,22 +117,15 @@ export default function App() {
         } else {
           await signInAnonymously(auth); 
         }
-      } catch (error) {
-        console.error("Auth error:", error);
-      }
+      } catch (error) { console.error("Auth error:", error); }
     };
-
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
-
+    const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);
 
   useEffect(() => {
     if (!user || !db) return;
-
     let unsubTournaments, unsubCategories, unsubPresets, unsubRes;
 
     try {
@@ -175,6 +170,26 @@ export default function App() {
     };
   }, [user]);
 
+  // 💡 特助升級：自動清潔工！當店長登入且有賽事資料時，自動刪除 14 天前的舊賽事
+  useEffect(() => {
+    if (isAdminAuth && tournaments.length > 0) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const threshold = new Date(today);
+      threshold.setDate(threshold.getDate() - 14); // 清理超過 14 天前的賽事
+
+      tournaments.forEach(t => {
+        const eventDate = new Date(`${t.date}T23:59:59`);
+        if (eventDate < threshold) {
+          deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id))
+            .then(() => console.log(`系統已自動清理過期賽事: ${t.title}`))
+            .catch(console.error);
+        }
+      });
+    }
+  }, [isAdminAuth, tournaments]);
+
+
   // ==========================================
   // 後台功能與操作
   // ==========================================
@@ -190,37 +205,50 @@ export default function App() {
     }
   };
 
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = (event) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800; 
-          const MAX_HEIGHT = 800; 
-          let width = img.width;
-          let height = img.height;
+  // 💡 特助升級：支援多圖批次上傳壓縮機
+  const handleImageUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
 
-          if (width > height) {
-            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-          } else {
-            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-          }
+    // 限制最多上傳 4 張圖，避免資料量過大
+    const allowedFiles = files.slice(0, 4);
 
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-          
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-          setFormData({ ...formData, image: compressedDataUrl });
+    const newImages = await Promise.all(allowedFiles.map(file => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 800; 
+            const MAX_HEIGHT = 800; 
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+            } else {
+              if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+          };
+          img.src = event.target.result;
         };
-        img.src = event.target.result;
-      };
-      reader.readAsDataURL(file);
-    }
+        reader.readAsDataURL(file);
+      });
+    }));
+
+    // 把新圖片加入到原本的圖片陣列中，總數不超過 4 張
+    setFormData(prev => ({ 
+      ...prev, 
+      images: [...(prev.images || []), ...newImages].slice(0, 4) 
+    }));
   };
 
   const handleAddTournament = async (e) => {
@@ -240,7 +268,8 @@ export default function App() {
       
       await Promise.all(promises);
 
-      setFormData({ ...formData, title: '', description: '', image: '' });
+      // 清空表單
+      setFormData({ ...formData, title: '', description: '', images: [] });
       setSchedules([{ date: '', time: '19:00' }]);
       
       const fileInput = document.getElementById('promo-image-upload');
@@ -364,6 +393,47 @@ export default function App() {
     );
   };
 
+  // 💡 特助加碼：獨立的「幻燈片相簿」元件，避免程式碼重複又超有質感
+  const ImageCarousel = ({ tournament }) => {
+    // 相容舊版的單張 image 以及新版的多張 images 陣列
+    const imgs = tournament.images && tournament.images.length > 0 
+      ? tournament.images 
+      : (tournament.image ? [tournament.image] : []);
+    
+    const idx = currentImgIdx[tournament.id] || 0;
+
+    if (imgs.length === 0) return null;
+
+    return (
+      <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group">
+        <img src={imgs[idx]} alt={tournament.title} className="w-full h-auto object-cover" />
+        
+        {/* 如果有多張圖片，才顯示左右箭頭跟下方點點 */}
+        {imgs.length > 1 && (
+          <>
+            <button 
+              onClick={(e) => handlePrevImage(e, tournament.id, imgs.length)} 
+              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full hover:bg-black/70 transition-colors shadow-sm"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button 
+              onClick={(e) => handleNextImage(e, tournament.id, imgs.length)} 
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full hover:bg-black/70 transition-colors shadow-sm"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+            <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">
+              {imgs.map((_, i) => (
+                <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors ${i === idx ? 'bg-white scale-125 shadow-sm' : 'bg-white/50'}`} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500 font-bold">讀取賽事資訊中...🚀</div>;
   }
@@ -405,7 +475,6 @@ export default function App() {
                 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
               `}</style>
 
-              {/* 💡 特助加碼：雙重導航小標籤，帶有自動下滑功能 */}
               <div className="px-1 mb-[-4px] flex flex-wrap gap-2">
                 <span className="text-[11px] font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm">
                   💡 分類按鈕可「多選」篩選！
@@ -457,7 +526,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* 列表模式 (14天精簡流 + 滾動區) */}
+            {/* 列表模式 */}
             {viewMode === 'list' && (() => {
                 const now = new Date();
                 const nextWeek = new Date(now);
@@ -489,16 +558,16 @@ export default function App() {
                           <Zap className="w-4 h-4 text-yellow-500" /><span className="font-bold">報名費：{t.fee}</span>
                         </div>
                         
-                        {(t.image || t.description) && (
+                        {/* 判斷是否有圖片陣列(新版)或單圖片(舊版)或備註 */}
+                        {((t.images && t.images.length > 0) || t.image || t.description) && (
                           <div className="mt-1">
                             <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2 rounded-xl flex justify-center items-center gap-1 transition-colors border border-orange-100">
                               {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
                             </button>
                             {expandedNotes[t.id] && (
                               <div className="mt-3 pt-3 border-t border-gray-100 transition-opacity duration-300">
-                                {t.image && (
-                                  <div className="mb-3 rounded-lg overflow-hidden border border-gray-100 shadow-sm"><img src={t.image} alt={t.title} className="w-full h-auto object-cover" /></div>
-                                )}
+                                {/* 💡 呼叫專屬的幻燈片元件 */}
+                                <ImageCarousel tournament={t} />
                                 {t.description && (
                                   <div className="text-sm text-gray-600 whitespace-pre-line">{renderTextWithLinks(t.description)}</div>
                                 )}
@@ -559,7 +628,6 @@ export default function App() {
                   })()}
                 </div>
 
-                {/* 行事曆下方詳細賽程列表 */}
                 {selectedDate && (
                   <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
                     <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2 mb-2">
@@ -581,18 +649,15 @@ export default function App() {
                             </div>
                           </div>
                           
-                          {(t.image || t.description) && (
+                          {((t.images && t.images.length > 0) || t.image || t.description) && (
                             <div className="mt-2">
                               <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
                                 {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
                               </button>
                               {expandedNotes[t.id] && (
                                 <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
-                                  {t.image && (
-                                    <div className="mb-2 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
-                                      <img src={t.image} alt={t.title} className="w-full h-auto object-cover" />
-                                    </div>
-                                  )}
+                                  {/* 💡 呼叫專屬的幻燈片元件 */}
+                                  <ImageCarousel tournament={t} />
                                   {t.description && (
                                     <div className="text-xs text-gray-600 whitespace-pre-line">
                                       {renderTextWithLinks(t.description)}
@@ -611,7 +676,6 @@ export default function App() {
             )}
             
             {/* 新手教學預約區塊 */}
-            {/* 💡 特助加碼：加上了 tutorial-section 這個 id，讓按鈕可以找得到地方滑下來 */}
             <div id="tutorial-section" className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
               <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-3 py-1.5 rounded-bl-xl shadow-sm">新手專區</div>
               <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-4">
@@ -704,7 +768,6 @@ export default function App() {
         {currentView === 'admin' && (
           <div className="space-y-6">
             
-            {/* 店長密碼鎖防護層 */}
             {!isAdminAuth ? (
               <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-200 text-center mt-10">
                 <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -891,14 +954,25 @@ export default function App() {
                     </div>
 
                     <div>
+                      {/* 💡 特助升級：支援多圖選擇 */}
                       <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
-                        <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖
+                        <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖 (可選多張，建議 1~3 張)
                       </label>
-                      <input id="promo-image-upload" type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
-                      {formData.image && (
-                        <div className="mt-3 relative inline-block">
-                          <img src={formData.image} alt="宣傳圖預覽" className="h-32 w-auto rounded-lg border border-gray-200 shadow-sm" />
-                          <button type="button" onClick={() => setFormData({...formData, image: ''})} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                      <input id="promo-image-upload" type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
+                      
+                      {/* 💡 特助升級：後台多圖預覽區塊 */}
+                      {formData.images && formData.images.length > 0 && (
+                        <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
+                          {formData.images.map((imgUrl, i) => (
+                            <div key={i} className="relative inline-block flex-shrink-0">
+                              <img src={imgUrl} alt={`預覽圖 ${i + 1}`} className="h-24 w-auto rounded-lg border border-gray-200 shadow-sm object-cover" />
+                              <button type="button" onClick={() => {
+                                const newImgs = [...formData.images];
+                                newImgs.splice(i, 1);
+                                setFormData({...formData, images: newImgs});
+                              }} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition-colors"><Trash2 className="w-3 h-3" /></button>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -982,18 +1056,14 @@ export default function App() {
                               </button>
                             </div>
                             
-                            {(t.image || t.description) && (
+                            {((t.images && t.images.length > 0) || t.image || t.description) && (
                               <div className="mt-2">
                                 <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
                                   {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
                                 </button>
                                 {expandedNotes[t.id] && (
                                   <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
-                                    {t.image && (
-                                      <div className="mb-2 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
-                                        <img src={t.image} alt={t.title} className="w-full h-auto object-cover" />
-                                      </div>
-                                    )}
+                                    <ImageCarousel tournament={t} />
                                     {t.description && (
                                       <div className="text-xs text-gray-600 whitespace-pre-line">
                                         {renderTextWithLinks(t.description)}
