@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut } from 'lucide-react';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save } from 'lucide-react';
 
 // ==========================================
 // Firebase 初始化與設定
@@ -57,14 +57,16 @@ export default function App() {
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
 
-  // 💡 特助升級：表單狀態改為陣列 images，支援多圖上傳
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
   const [formData, setFormData] = useState({ gameType: 'UA', title: '', fee: '', description: '', images: [] });
   const [addSuccess, setAddSuccess] = useState(false);
 
   const [expandedNotes, setExpandedNotes] = useState({});
-  // 💡 特助升級：記錄每個賽事目前正在看第幾張幻燈片
   const [currentImgIdx, setCurrentImgIdx] = useState({});
+
+  // 💡 特助升級：編輯賽事專用狀態
+  const [editingId, setEditingId] = useState(null);
+  const [editFormData, setEditFormData] = useState(null);
 
   const toggleNote = (e, id) => {
     e.stopPropagation();
@@ -170,13 +172,12 @@ export default function App() {
     };
   }, [user]);
 
-  // 💡 特助升級：自動清潔工！當店長登入且有賽事資料時，自動刪除 14 天前的舊賽事
   useEffect(() => {
     if (isAdminAuth && tournaments.length > 0) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const threshold = new Date(today);
-      threshold.setDate(threshold.getDate() - 14); // 清理超過 14 天前的賽事
+      threshold.setDate(threshold.getDate() - 14); 
 
       tournaments.forEach(t => {
         const eventDate = new Date(`${t.date}T23:59:59`);
@@ -205,12 +206,9 @@ export default function App() {
     }
   };
 
-  // 💡 特助升級：支援多圖批次上傳壓縮機
   const handleImageUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
-
-    // 限制最多上傳 4 張圖，避免資料量過大
     const allowedFiles = files.slice(0, 4);
 
     const newImages = await Promise.all(allowedFiles.map(file => {
@@ -244,8 +242,50 @@ export default function App() {
       });
     }));
 
-    // 把新圖片加入到原本的圖片陣列中，總數不超過 4 張
     setFormData(prev => ({ 
+      ...prev, 
+      images: [...(prev.images || []), ...newImages].slice(0, 4) 
+    }));
+  };
+
+  // 💡 特助升級：處理編輯模式下的多圖上傳
+  const handleEditImageUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    const allowedFiles = files.slice(0, 4);
+
+    const newImages = await Promise.all(allowedFiles.map(file => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 800; 
+            const MAX_HEIGHT = 800; 
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+            } else {
+              if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }));
+
+    setEditFormData(prev => ({ 
       ...prev, 
       images: [...(prev.images || []), ...newImages].slice(0, 4) 
     }));
@@ -268,7 +308,6 @@ export default function App() {
       
       await Promise.all(promises);
 
-      // 清空表單
       setFormData({ ...formData, title: '', description: '', images: [] });
       setSchedules([{ date: '', time: '19:00' }]);
       
@@ -284,6 +323,23 @@ export default function App() {
     if (!user) return;
     try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', id)); } 
     catch (error) { console.error("Error deleting document: ", error); }
+  };
+
+  // 💡 特助升級：儲存編輯結果
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!user || !editingId || !editFormData) return;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', editingId), {
+        ...editFormData,
+        updatedAt: new Date().toISOString()
+      });
+      // 成功後退出編輯模式
+      setEditingId(null);
+      setEditFormData(null);
+    } catch (error) {
+      console.error("Error updating document: ", error);
+    }
   };
 
   const handleAddCategory = async (e) => {
@@ -393,9 +449,7 @@ export default function App() {
     );
   };
 
-  // 💡 特助加碼：獨立的「幻燈片相簿」元件，避免程式碼重複又超有質感
   const ImageCarousel = ({ tournament }) => {
-    // 相容舊版的單張 image 以及新版的多張 images 陣列
     const imgs = tournament.images && tournament.images.length > 0 
       ? tournament.images 
       : (tournament.image ? [tournament.image] : []);
@@ -408,7 +462,6 @@ export default function App() {
       <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group">
         <img src={imgs[idx]} alt={tournament.title} className="w-full h-auto object-cover" />
         
-        {/* 如果有多張圖片，才顯示左右箭頭跟下方點點 */}
         {imgs.length > 1 && (
           <>
             <button 
@@ -558,7 +611,6 @@ export default function App() {
                           <Zap className="w-4 h-4 text-yellow-500" /><span className="font-bold">報名費：{t.fee}</span>
                         </div>
                         
-                        {/* 判斷是否有圖片陣列(新版)或單圖片(舊版)或備註 */}
                         {((t.images && t.images.length > 0) || t.image || t.description) && (
                           <div className="mt-1">
                             <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2 rounded-xl flex justify-center items-center gap-1 transition-colors border border-orange-100">
@@ -566,7 +618,6 @@ export default function App() {
                             </button>
                             {expandedNotes[t.id] && (
                               <div className="mt-3 pt-3 border-t border-gray-100 transition-opacity duration-300">
-                                {/* 💡 呼叫專屬的幻燈片元件 */}
                                 <ImageCarousel tournament={t} />
                                 {t.description && (
                                   <div className="text-sm text-gray-600 whitespace-pre-line">{renderTextWithLinks(t.description)}</div>
@@ -628,6 +679,7 @@ export default function App() {
                   })()}
                 </div>
 
+                {/* 行事曆下方詳細賽程列表 */}
                 {selectedDate && (
                   <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
                     <h4 className="font-bold text-gray-600 text-sm flex items-center gap-2 mb-2">
@@ -656,7 +708,6 @@ export default function App() {
                               </button>
                               {expandedNotes[t.id] && (
                                 <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
-                                  {/* 💡 呼叫專屬的幻燈片元件 */}
                                   <ImageCarousel tournament={t} />
                                   {t.description && (
                                     <div className="text-xs text-gray-600 whitespace-pre-line">
@@ -793,7 +844,6 @@ export default function App() {
                 </form>
               </div>
             ) : (
-              /* ===== 登入成功後的管理畫面 ===== */
               <>
                 <div className="flex justify-between items-center bg-orange-100 p-4 rounded-2xl border border-orange-200">
                   <span className="font-black text-orange-800 flex items-center gap-2">
@@ -954,13 +1004,11 @@ export default function App() {
                     </div>
 
                     <div>
-                      {/* 💡 特助升級：支援多圖選擇 */}
                       <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
                         <ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖 (可選多張，建議 1~3 張)
                       </label>
                       <input id="promo-image-upload" type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-orange-100 file:text-orange-700 hover:file:bg-orange-200 cursor-pointer outline-none transition-colors" />
                       
-                      {/* 💡 特助升級：後台多圖預覽區塊 */}
                       {formData.images && formData.images.length > 0 && (
                         <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
                           {formData.images.map((imgUrl, i) => (
@@ -1044,36 +1092,119 @@ export default function App() {
                         <p className="text-sm text-gray-400 font-bold bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">這天目前沒有安排賽事喔！</p>
                       ) : (
                         tournaments.filter(t => t.date === adminSelectedDate).map(t => (
-                          <div key={t.id} className="p-3 bg-white shadow-sm rounded-xl border border-red-100 flex flex-col transition-colors hover:border-red-300">
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <GameBadge type={t.gameType} />
-                                <div className="font-black text-gray-800 mt-1">{t.title}</div>
-                                <div className="text-xs text-gray-500 font-bold">{t.time} 開打</div>
+                          editingId === t.id ? (
+                            // 💡 特助升級：賽事編輯模式專用表單
+                            <form key={`edit-${t.id}`} onSubmit={handleSaveEdit} className="p-4 bg-orange-50 shadow-inner rounded-xl border-2 border-orange-300 flex flex-col gap-3">
+                              <div className="flex justify-between items-center border-b border-orange-200 pb-2">
+                                <span className="font-black text-orange-800 flex items-center gap-1"><Edit className="w-4 h-4"/> 編輯賽事</span>
+                                <button type="button" onClick={() => { setEditingId(null); setEditFormData(null); }} className="text-gray-500 hover:text-red-500 transition-colors"><X className="w-5 h-5"/></button>
                               </div>
-                              <button onClick={() => handleDelete(t.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0 ml-2 border border-transparent hover:border-red-200" title="刪除賽事">
-                                <Trash2 className="w-5 h-5" />
-                              </button>
-                            </div>
-                            
-                            {((t.images && t.images.length > 0) || t.image || t.description) && (
-                              <div className="mt-2">
-                                <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
-                                  {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
-                                </button>
-                                {expandedNotes[t.id] && (
-                                  <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
-                                    <ImageCarousel tournament={t} />
-                                    {t.description && (
-                                      <div className="text-xs text-gray-600 whitespace-pre-line">
-                                        {renderTextWithLinks(t.description)}
+                              
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="block text-xs font-bold text-orange-700 mb-1">遊戲</label>
+                                  <select value={editFormData.gameType} onChange={(e) => setEditFormData({...editFormData, gameType: e.target.value})} className="w-full p-2 border border-orange-200 rounded-lg bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none">
+                                    {categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold text-orange-700 mb-1">名稱</label>
+                                  <input required type="text" value={editFormData.title} onChange={(e) => setEditFormData({...editFormData, title: e.target.value})} className="w-full p-2 border border-orange-200 rounded-lg bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="block text-xs font-bold text-orange-700 mb-1">日期</label>
+                                  <input required type="date" value={editFormData.date} onChange={(e) => setEditFormData({...editFormData, date: e.target.value})} className="w-full p-2 border border-orange-200 rounded-lg bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold text-orange-700 mb-1">時間</label>
+                                  <input required type="time" value={editFormData.time} onChange={(e) => setEditFormData({...editFormData, time: e.target.value})} className="w-full p-2 border border-orange-200 rounded-lg bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-orange-700 mb-1">費用</label>
+                                <input required type="text" value={editFormData.fee} onChange={(e) => setEditFormData({...editFormData, fee: e.target.value})} className="w-full p-2 border border-orange-200 rounded-lg bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" />
+                              </div>
+
+                              <div>
+                                <div className="flex justify-between items-end mb-1">
+                                  <label className="block text-xs font-bold text-orange-700">備註</label>
+                                  {/* 讓編輯模式也可以快速套用模板 */}
+                                  <select onChange={(e) => { if(e.target.value) setEditFormData({...editFormData, description: e.target.value})}} className="text-xs border border-orange-200 rounded p-1 bg-white text-orange-700 font-bold outline-none max-w-[120px]">
+                                    <option value="">載入模板...</option>
+                                    {notePresets.map(p => <option key={p.id} value={p.content}>{p.title}</option>)}
+                                  </select>
+                                </div>
+                                <textarea rows="3" value={editFormData.description} onChange={(e) => setEditFormData({...editFormData, description: e.target.value})} className="w-full p-2 border border-orange-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-orange-500 outline-none resize-none font-bold" />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-orange-700 mb-1">增刪圖片 (最多4張)</label>
+                                <input type="file" multiple accept="image/*" onChange={handleEditImageUpload} className="w-full p-1 border border-orange-200 rounded-lg bg-white text-xs file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-orange-100 file:text-orange-700" />
+                                {editFormData.images && editFormData.images.length > 0 && (
+                                  <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                                    {editFormData.images.map((imgUrl, i) => (
+                                      <div key={i} className="relative inline-block flex-shrink-0">
+                                        <img src={imgUrl} alt={`編輯預覽 ${i}`} className="h-16 w-auto rounded border border-orange-200 object-cover" />
+                                        <button type="button" onClick={() => {
+                                          const newImgs = [...editFormData.images];
+                                          newImgs.splice(i, 1);
+                                          setEditFormData({...editFormData, images: newImgs});
+                                        }} className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"><X className="w-3 h-3" /></button>
                                       </div>
-                                    )}
+                                    ))}
                                   </div>
                                 )}
                               </div>
-                            )}
-                          </div>
+
+                              <button type="submit" className="w-full py-2.5 mt-2 bg-orange-600 text-white font-black rounded-lg shadow-md hover:bg-orange-700 transition-colors flex justify-center items-center gap-1.5">
+                                <Save className="w-4 h-4" /> 儲存變更
+                              </button>
+                            </form>
+                          ) : (
+                            <div key={t.id} className="p-3 bg-white shadow-sm rounded-xl border border-red-100 flex flex-col transition-colors hover:border-red-300">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <GameBadge type={t.gameType} />
+                                  <div className="font-black text-gray-800 mt-1">{t.title}</div>
+                                  <div className="text-xs text-gray-500 font-bold">{t.time} 開打</div>
+                                </div>
+                                <div className="flex items-center ml-2">
+                                  <button onClick={() => { 
+                                    setEditingId(t.id); 
+                                    // 相容舊資料單張 image 轉為 images 陣列
+                                    setEditFormData({...t, images: t.images && t.images.length > 0 ? t.images : (t.image ? [t.image] : [])}); 
+                                  }} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors border border-transparent hover:border-blue-200" title="編輯賽事">
+                                    <Edit className="w-5 h-5" />
+                                  </button>
+                                  <button onClick={() => handleDelete(t.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-200" title="刪除賽事">
+                                    <Trash2 className="w-5 h-5" />
+                                  </button>
+                                </div>
+                              </div>
+                              
+                              {((t.images && t.images.length > 0) || t.image || t.description) && (
+                                <div className="mt-2">
+                                  <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-1.5 rounded-lg flex justify-center items-center gap-1 transition-colors border border-orange-100">
+                                    {expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 詳細資訊點我展開'}
+                                  </button>
+                                  {expandedNotes[t.id] && (
+                                    <div className="mt-2 pt-2 border-t border-gray-100 transition-opacity duration-300">
+                                      <ImageCarousel tournament={t} />
+                                      {t.description && (
+                                        <div className="text-xs text-gray-600 whitespace-pre-line">
+                                          {renderTextWithLinks(t.description)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
                         ))
                       )}
                     </div>
