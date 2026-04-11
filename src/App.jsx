@@ -46,6 +46,9 @@ export default function App() {
   const [adminMonth, setAdminMonth] = useState(new Date());
   const [adminSelectedDate, setAdminSelectedDate] = useState(null);
 
+  // 💡 特助升級：追蹤行事曆起始日狀態（預設週日為 false，週一為 true）
+  const [weekStartsOnMonday, setWeekStartsOnMonday] = useState(false);
+
   const [categories, setCategories] = useState([]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryColor, setNewCategoryColor] = useState('bg-red-200');
@@ -64,7 +67,6 @@ export default function App() {
   const [expandedNotes, setExpandedNotes] = useState({});
   const [currentImgIdx, setCurrentImgIdx] = useState({});
 
-  // 💡 特助升級：編輯賽事專用狀態
   const [editingId, setEditingId] = useState(null);
   const [editFormData, setEditFormData] = useState(null);
 
@@ -248,7 +250,6 @@ export default function App() {
     }));
   };
 
-  // 💡 特助升級：處理編輯模式下的多圖上傳
   const handleEditImageUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
@@ -325,7 +326,6 @@ export default function App() {
     catch (error) { console.error("Error deleting document: ", error); }
   };
 
-  // 💡 特助升級：儲存編輯結果
   const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!user || !editingId || !editFormData) return;
@@ -334,7 +334,6 @@ export default function App() {
         ...editFormData,
         updatedAt: new Date().toISOString()
       });
-      // 成功後退出編輯模式
       setEditingId(null);
       setEditFormData(null);
     } catch (error) {
@@ -487,6 +486,11 @@ export default function App() {
     );
   };
 
+  // 💡 特助加碼：依照起始日設定回傳正確的星期標題陣列
+  const weekDaysHeaders = weekStartsOnMonday 
+    ? ['一', '二', '三', '四', '五', '六', '日'] 
+    : ['日', '一', '二', '三', '四', '五', '六'];
+
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500 font-bold">讀取賽事資訊中...🚀</div>;
   }
@@ -636,20 +640,35 @@ export default function App() {
             {viewMode === 'calendar' && (
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-4">
-                  <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-5 h-5" /></button>
-                  <h3 className="font-black text-lg text-gray-800">{currentMonth.getFullYear()}年 {currentMonth.getMonth() + 1}月</h3>
-                  <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-5 h-5" /></button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+                    <h3 className="font-black text-lg text-gray-800 w-20 text-center">{currentMonth.getFullYear()}年 {currentMonth.getMonth() + 1}月</h3>
+                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-5 h-5" /></button>
+                  </div>
+                  {/* 💡 特助加碼：行事曆起始日切換按鈕 */}
+                  <button 
+                    onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)}
+                    className="text-[10px] font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors shadow-sm"
+                    title="切換行事曆排版方式"
+                  >
+                    {weekStartsOnMonday ? '改以「週日」為起始' : '改以「週一」為起始'} 🔁
+                  </button>
                 </div>
                 <div className="grid grid-cols-7 gap-1 mb-2 text-center text-xs font-bold text-gray-400">
-                  <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
+                  {/* 動態渲染星期標題 */}
+                  {weekDaysHeaders.map(day => <div key={day}>{day}</div>)}
                 </div>
                 <div className="grid grid-cols-7 gap-1">
                   {(() => {
                     const year = currentMonth.getFullYear(), month = currentMonth.getMonth();
                     const daysInMonth = new Date(year, month + 1, 0).getDate();
                     const firstDay = new Date(year, month, 1).getDay();
+                    
+                    // 💡 判斷要空出幾格（根據週一或週日為第一天）
+                    const adjustedFirstDay = weekStartsOnMonday ? (firstDay === 0 ? 6 : firstDay - 1) : firstDay;
+                    
                     const cells = [];
-                    for (let i = 0; i < firstDay; i++) cells.push(<div key={`empty-${i}`} className="h-10"></div>);
+                    for (let i = 0; i < adjustedFirstDay; i++) cells.push(<div key={`empty-${i}`} className="h-10"></div>);
                     for (let d = 1; d <= daysInMonth; d++) {
                       const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                       const dayEvents = tournaments.filter(t => t.date === dateString && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
@@ -1038,13 +1057,24 @@ export default function App() {
                   </h2>
 
                   <div className="flex justify-between items-center mb-4 bg-gray-50 rounded-xl p-2 border border-gray-100">
-                    <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-5 h-5" /></button>
-                    <h3 className="font-black text-lg text-gray-800">{adminMonth.getFullYear()}年 {adminMonth.getMonth() + 1}月</h3>
-                    <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-5 h-5" /></button>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+                      <h3 className="font-black text-lg text-gray-800 w-20 text-center">{adminMonth.getFullYear()}年 {adminMonth.getMonth() + 1}月</h3>
+                      <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-5 h-5" /></button>
+                    </div>
+                    {/* 💡 特助加碼：後台也有一模一樣的切換按鈕，兩邊自動同步 */}
+                    <button 
+                      onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)}
+                      className="text-[10px] font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors shadow-sm"
+                      title="切換行事曆排版方式"
+                    >
+                      {weekStartsOnMonday ? '改以「週日」為起始' : '改以「週一」為起始'} 🔁
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-7 gap-1 mb-2 text-center text-xs font-bold text-gray-400">
-                    <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
+                    {/* 動態渲染星期標題 */}
+                    {weekDaysHeaders.map(day => <div key={day}>{day}</div>)}
                   </div>
 
                   <div className="grid grid-cols-7 gap-1">
@@ -1052,8 +1082,12 @@ export default function App() {
                       const year = adminMonth.getFullYear(), month = adminMonth.getMonth();
                       const daysInMonth = new Date(year, month + 1, 0).getDate();
                       const firstDay = new Date(year, month, 1).getDay();
+                      
+                      // 💡 根據切換狀態，智慧計算要空出的格子數量
+                      const adjustedFirstDay = weekStartsOnMonday ? (firstDay === 0 ? 6 : firstDay - 1) : firstDay;
+                      
                       const cells = [];
-                      for (let i = 0; i < firstDay; i++) cells.push(<div key={`empty-${i}`} className="h-10"></div>);
+                      for (let i = 0; i < adjustedFirstDay; i++) cells.push(<div key={`empty-${i}`} className="h-10"></div>);
                       for (let d = 1; d <= daysInMonth; d++) {
                         const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const dayEvents = tournaments.filter(t => t.date === dateString);
@@ -1093,7 +1127,6 @@ export default function App() {
                       ) : (
                         tournaments.filter(t => t.date === adminSelectedDate).map(t => (
                           editingId === t.id ? (
-                            // 💡 特助升級：賽事編輯模式專用表單
                             <form key={`edit-${t.id}`} onSubmit={handleSaveEdit} className="p-4 bg-orange-50 shadow-inner rounded-xl border-2 border-orange-300 flex flex-col gap-3">
                               <div className="flex justify-between items-center border-b border-orange-200 pb-2">
                                 <span className="font-black text-orange-800 flex items-center gap-1"><Edit className="w-4 h-4"/> 編輯賽事</span>
@@ -1132,7 +1165,6 @@ export default function App() {
                               <div>
                                 <div className="flex justify-between items-end mb-1">
                                   <label className="block text-xs font-bold text-orange-700">備註</label>
-                                  {/* 讓編輯模式也可以快速套用模板 */}
                                   <select onChange={(e) => { if(e.target.value) setEditFormData({...editFormData, description: e.target.value})}} className="text-xs border border-orange-200 rounded p-1 bg-white text-orange-700 font-bold outline-none max-w-[120px]">
                                     <option value="">載入模板...</option>
                                     {notePresets.map(p => <option key={p.id} value={p.content}>{p.title}</option>)}
@@ -1175,7 +1207,6 @@ export default function App() {
                                 <div className="flex items-center ml-2">
                                   <button onClick={() => { 
                                     setEditingId(t.id); 
-                                    // 相容舊資料單張 image 轉為 images 陣列
                                     setEditFormData({...t, images: t.images && t.images.length > 0 ? t.images : (t.image ? [t.image] : [])}); 
                                   }} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors border border-transparent hover:border-blue-200" title="編輯賽事">
                                     <Edit className="w-5 h-5" />
