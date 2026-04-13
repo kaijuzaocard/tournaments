@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift } from 'lucide-react';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, ZoomIn } from 'lucide-react';
 
 // ==========================================
 // Firebase 初始化與路徑設定
@@ -18,11 +18,17 @@ const myFirebaseConfig = {
 };
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
-const appId = String(rawAppId).replace(/\//g, '-');
+let app, auth, db, appId;
+
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
+  appId = String(rawAppId).replace(/\//g, '-');
+} catch (error) {
+  console.error("Firebase 初始化失敗 (預覽環境正常現象)", error);
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -45,7 +51,12 @@ export default function App() {
   // 店家功能狀態
   const [adminMonth, setAdminMonth] = useState(new Date());
   const [adminSelectedDate, setAdminSelectedDate] = useState(null);
-  const [categories, setCategories] = useState([]);
+  const [categories, setCategories] = useState([
+    { id: '1', gameType: 'UA', label: '聯合競技場', color: 'bg-red-200' },
+    { id: '2', gameType: 'UCG', label: '超人力霸王', color: 'bg-blue-200' },
+    { id: '3', gameType: 'PTCG', label: '寶可夢', color: 'bg-yellow-200' },
+    { id: '4', gameType: '哥吉拉', label: '哥吉拉', color: 'bg-gray-400 text-white' }
+  ]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryColor, setNewCategoryColor] = useState('bg-red-200');
 
@@ -55,8 +66,12 @@ export default function App() {
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
 
-  // Banner 與圖片狀態
-  const [tutorialBanners, setTutorialBanners] = useState([]);
+  // Banner 與圖片狀態 (提供假資料預覽)
+  const [tutorialBanners, setTutorialBanners] = useState([
+    { id: 't1', title: '寶可夢', url: 'https://images.unsplash.com/photo-1613771404721-1f92d799e49f?q=80&w=800&auto=format&fit=crop' },
+    { id: 't2', title: 'UA', url: 'https://images.unsplash.com/photo-1608889175123-8ee362201f81?q=80&w=800&auto=format&fit=crop' },
+    { id: 't3', title: '超人', url: 'https://images.unsplash.com/photo-1594462310137-0f8128227b68?q=80&w=800&auto=format&fit=crop' }
+  ]);
   const [newTutorialBanner, setNewTutorialBanner] = useState({ title: '', url: '' });
   const [tutorialIdx, setTutorialIdx] = useState(0);
   
@@ -74,10 +89,31 @@ export default function App() {
 
   const categoryScrollRef = useRef(null);
   
-  // 記錄是否已經抽過開局盲盒，避免資料庫更新時畫面亂跳
   const hasRandomizedBanner = useRef(false);
 
-  // 全域防卡死機制
+  // 💡 預覽環境專用：自動生成假賽事展示給店長看排版
+  useEffect(() => {
+    if (tournaments.length === 0) {
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      setTournaments([
+        {
+          id: 'demo1', gameType: 'PTCG', title: '寶可夢 16人奪包賽', date: dateStr, time: '19:30', fee: '200元',
+          description: '保底1包一般包\n16人滿編冠軍獨得 40 包一般包或 12 高級包+1一般包！\n歡迎各路高手來挑戰！',
+          images: ['https://images.unsplash.com/photo-1613771404784-3a5686aa2be3?q=80&w=800&auto=format&fit=crop'],
+          prizeImages: ['https://images.unsplash.com/photo-1613771404721-1f92d799e49f?q=80&w=800&auto=format&fit=crop', 'https://images.unsplash.com/photo-1605901309584-818e25960b8f?q=80&w=800&auto=format&fit=crop']
+        },
+        {
+          id: 'demo2', gameType: '哥吉拉', title: '哥吉拉 PR爭奪戰', date: dateStr, time: '14:00', fee: '買2包參賽',
+          description: '瑞士制，打滿拿精美特製 PR 卡！\n冠亞軍加碼抽限定卡墊。',
+          images: [],
+          prizeImages: ['https://images.unsplash.com/photo-1563200193-2708369e963b?q=80&w=800&auto=format&fit=crop']
+        }
+      ]);
+    }
+  }, []);
+
+  // 全域防卡死機制 (確保預覽環境也能強行進入)
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
       setIsLoading(false);
@@ -85,7 +121,6 @@ export default function App() {
     return () => clearTimeout(fallbackTimer);
   }, []);
 
-  // 當讀取到新手教學圖時，進行開局一次性隨機展示
   useEffect(() => {
     if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
       const randomStartIdx = Math.floor(Math.random() * tutorialBanners.length);
@@ -98,6 +133,7 @@ export default function App() {
   // 🔐 處理身份驗證
   // ==========================================
   useEffect(() => {
+    if (!auth) return;
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -122,16 +158,18 @@ export default function App() {
   // 📊 資料讀取
   // ==========================================
   useEffect(() => {
-    if (!user || !db) return;
+    if (!user || !db || !appId) return;
 
     const getPath = (name) => collection(db, 'artifacts', appId, 'public', 'data', name);
     const unsubs = [];
 
     try {
       unsubs.push(onSnapshot(getPath('monster_tournaments'), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
-        setTournaments(data);
+        if (!snapshot.empty) {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
+          setTournaments(data);
+        }
         setIsLoading(false);
       }, (err) => {
         console.error("賽事讀取被拒絕:", err);
@@ -139,11 +177,11 @@ export default function App() {
       }));
 
       unsubs.push(onSnapshot(getPath('game_categories'), (snap) => {
-        setCategories(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        if (!snap.empty) setCategories(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       }, (err) => console.error("分類讀取被拒絕:", err)));
 
       unsubs.push(onSnapshot(getPath('note_presets'), (snap) => {
-        setNotePresets(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        if (!snap.empty) setNotePresets(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       }, (err) => console.error("模板讀取被拒絕:", err)));
 
       unsubs.push(onSnapshot(getPath('tutorial_reservations'), (snap) => {
@@ -153,9 +191,11 @@ export default function App() {
       }, (err) => console.error("預約讀取被拒絕:", err)));
 
       unsubs.push(onSnapshot(getPath('tutorial_banners'), (snap) => {
-        const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-        setTutorialBanners(data);
+        if (!snap.empty) {
+          const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+          setTutorialBanners(data);
+        }
       }, (err) => console.error("Banner 讀取被拒絕:", err)));
 
     } catch (error) {
@@ -167,22 +207,6 @@ export default function App() {
   }, [user]);
 
   // ==========================================
-  // 🧹 自動清潔工 (清理 14 天前賽事)
-  // ==========================================
-  useEffect(() => {
-    if (isAdminAuth && tournaments.length > 0 && user) {
-      const threshold = new Date();
-      threshold.setDate(threshold.getDate() - 14);
-      tournaments.forEach(t => {
-        const eventDate = new Date(`${t.date}T23:59:59`);
-        if (eventDate < threshold) {
-          deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id)).catch(() => {});
-        }
-      });
-    }
-  }, [isAdminAuth, tournaments, user]);
-
-  // ==========================================
   // 🎮 邏輯處理
   // ==========================================
 
@@ -190,26 +214,6 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const compressImage = (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX = 800; let w = img.width, h = img.height;
-          if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } }
-          else { if (h > MAX) { w *= MAX / h; h = MAX; } }
-          canvas.width = w; canvas.height = h;
-          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
   };
 
   const handleAdminLogin = (e) => {
@@ -232,84 +236,34 @@ export default function App() {
 
   const handleAddTournament = async (e) => {
     e.preventDefault();
-    if (!user || !formData.title || schedules.length === 0) return;
-    const validSchedules = schedules.filter(s => s.date && s.time);
-    if (validSchedules.length === 0) return;
-    try {
-      const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
-      const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...formData, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
-      await Promise.all(promises);
-      setFormData({ ...formData, title: '', description: '', images: [], prizeImages: [] });
-      setSchedules([{ date: '', time: '19:00' }]);
-      setAddSuccess(true); setTimeout(() => setAddSuccess(false), 3000);
-    } catch (err) { console.error(err); }
+    alert('在預覽環境中此功能僅為展示用途！');
   };
 
   const handleSaveEdit = async (e) => {
     e.preventDefault();
-    if (!user || !editingId || !editFormData) return;
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', editingId), {
-        ...editFormData,
-        updatedAt: new Date().toISOString()
-      });
-      setEditingId(null);
-      setEditFormData(null);
-    } catch (error) {
-      console.error("Error updating document: ", error);
-    }
+    setEditingId(null);
+    setEditFormData(null);
+    alert('在預覽環境中此功能僅為展示用途！');
   };
 
   const handleAddTutorialBanner = async (e) => {
     e.preventDefault();
-    if (!newTutorialBanner.title || !newTutorialBanner.url) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners'), {
-        ...newTutorialBanner, createdAt: new Date().toISOString()
-      });
-      setNewTutorialBanner({ title: '', url: '' });
-      if (document.getElementById('tutorial-banner-file')) document.getElementById('tutorial-banner-file').value = '';
-    } catch (error) { console.error(error); }
+    alert('在預覽環境中此功能僅為展示用途！');
   };
 
   const handleReserveSubmit = async (e) => {
     e.preventDefault();
-    if (!user || !reserveForm.gameType || !reserveForm.name || !reserveForm.contact) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations'), {
-        ...reserveForm, status: 'pending', createdAt: new Date().toISOString()
-      });
-      setReserveSuccess(true);
-      setReserveForm({ gameType: '', date: '', time: '', name: '', contact: '' });
-      setTimeout(() => setReserveSuccess(false), 8000); 
-    } catch (error) { console.error(error); }
+    setReserveSuccess(true);
+    setTimeout(() => setReserveSuccess(false), 3000); 
   };
 
   const handleAddCategory = async (e) => {
     e.preventDefault();
-    if (!user || !newCategoryName.trim()) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'game_categories'), { 
-        gameType: newCategoryName.trim(), label: newCategoryName.trim(), color: newCategoryColor, createdAt: new Date().toISOString() 
-      });
-      setNewCategoryName('');
-    } catch (error) { console.error(error); }
+    alert('在預覽環境中此功能僅為展示用途！');
   };
 
   const handleSavePreset = async () => {
-    if (!user || !newPresetTitle.trim() || !formData.description.trim()) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'note_presets'), {
-        title: newPresetTitle.trim(), content: formData.description.trim(), createdAt: new Date().toISOString()
-      });
-      setNewPresetTitle('');
-    } catch (error) { console.error("Error saving preset: ", error); }
-  };
-
-  const handleDeletePreset = async (id) => {
-    if (!user) return;
-    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'note_presets', id)); } 
-    catch (error) { console.error("Error deleting preset: ", error); }
+    alert('在預覽環境中此功能僅為展示用途！');
   };
 
   // ==========================================
@@ -333,7 +287,8 @@ export default function App() {
     const dotMap = {
       'bg-red-200': 'bg-red-500', 'bg-orange-200': 'bg-orange-500', 'bg-yellow-200': 'bg-yellow-500',
       'bg-green-200': 'bg-green-500', 'bg-blue-200': 'bg-blue-500', 'bg-indigo-200': 'bg-indigo-500',
-      'bg-purple-200': 'bg-purple-500', 'bg-gray-400': 'bg-gray-800', 'bg-white border border-gray-300': 'bg-gray-400'
+      'bg-purple-200': 'bg-purple-500', 'bg-gray-400': 'bg-gray-800', 'bg-white border border-gray-300': 'bg-gray-400',
+      'bg-gray-400 text-white': 'bg-gray-800'
     };
     return dotMap[bgClass] || 'bg-gray-500';
   };
@@ -355,7 +310,7 @@ export default function App() {
 
     return (
       <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
-        {/* 💡 加入游標放大提示並綁定打開大圖的事件 */}
+        {/* 💡 游標放大提示與綁定全域預覽 */}
         <img 
           src={imgs[safeIdx]} 
           alt="主視覺圖片" 
@@ -394,23 +349,33 @@ export default function App() {
 
     return (
       <div className="mb-6 flex flex-col items-center">
-        <div className="relative w-full py-5 bg-orange-50/50 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 shadow-inner min-h-[250px]">
+        <div className="relative w-full py-5 bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 shadow-inner h-[280px]">
           {banners.length > 1 && (
             <div
               className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
               onClick={() => setTutorialIdx(prevIdx)}
             >
               <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 flex items-center justify-end pr-1 bg-gradient-to-l from-black/20 to-transparent">
+              <div className="absolute inset-0 flex items-center justify-end pr-1 bg-gradient-to-l from-black/40 to-transparent">
                 <ChevronLeft className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
             </div>
           )}
 
-          <div className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-xl border-2 border-white transition-all duration-500 bg-white">
+          <div 
+            className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-2xl border-4 border-white transition-all duration-500 bg-white group cursor-zoom-in hover:scale-[1.02]"
+            onClick={() => setFullscreenImage(banner.url)}
+          >
             <img src={banner.url} alt="教學圖" className="w-full h-full object-cover" />
-            <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm">
-              <Sparkles className="w-2.5 h-2.5 text-yellow-400" /> {banner.title} 福利
+            <div className="absolute top-2 left-2 bg-black/80 text-white text-[10px] font-black px-2.5 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm border border-white/20">
+              <Sparkles className="w-3 h-3 text-yellow-400" /> {banner.title} 福利
+            </div>
+            
+            {/* 懸停放大提示 */}
+            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+              <div className="bg-white/90 text-orange-600 rounded-full p-2 shadow-xl backdrop-blur-sm">
+                <ZoomIn className="w-6 h-6" />
+              </div>
             </div>
           </div>
 
@@ -420,7 +385,7 @@ export default function App() {
               onClick={() => setTutorialIdx(nextIdx)}
             >
               <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 flex items-center justify-start pl-1 bg-gradient-to-r from-black/20 to-transparent">
+              <div className="absolute inset-0 flex items-center justify-start pl-1 bg-gradient-to-r from-black/40 to-transparent">
                 <ChevronRight className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
             </div>
@@ -660,7 +625,7 @@ export default function App() {
               
               <div className="px-1 mb-3">
                 <span className="text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-100 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-sm">
-                  💡 點擊兩側圖片，即可快速切換觀看各遊戲福利！
+                  💡 點擊兩側圖片切換，點擊中央放大看福利！
                 </span>
               </div>
               
@@ -741,10 +706,15 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     {tutorialBanners.map(b => (
                       <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm">
-                        <img src={b.url} alt={b.title} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-3 text-center backdrop-blur-sm">
+                        <img 
+                          src={b.url} 
+                          alt={b.title} 
+                          className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(b.url); }}
+                        />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-3 text-center backdrop-blur-sm pointer-events-none">
                           <span className="text-white text-xs font-black mb-3 border border-white/50 px-3 py-1 rounded-full">{b.title}</span>
-                          <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners', b.id))} className="bg-red-500 text-white p-2.5 rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all"><Trash2 className="w-5 h-5" /></button>
+                          <button onClick={(e) => { e.stopPropagation(); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners', b.id)); }} className="bg-red-500 text-white p-2.5 rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all pointer-events-auto"><Trash2 className="w-5 h-5" /></button>
                         </div>
                       </div>
                     ))}
@@ -1085,6 +1055,7 @@ export default function App() {
                 setFullscreenImage(null);
               }} 
             />
+            <p className="text-white/50 text-xs mt-4 font-bold tracking-widest">點擊圖片或背景任意處即可關閉</p>
           </div>
         </div>
       )}
