@@ -70,7 +70,7 @@ export default function App() {
 
   const categoryScrollRef = useRef(null);
 
-  // 全域防卡死機制，2.5 秒後強制解鎖載入畫面
+  // 全域防卡死機制
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
       setIsLoading(false);
@@ -103,7 +103,7 @@ export default function App() {
   }, []);
 
   // ==========================================
-  // 📊 只有在 user 成功後才抓資料
+  // 📊 資料讀取
   // ==========================================
   useEffect(() => {
     if (!user || !db) return;
@@ -304,6 +304,7 @@ export default function App() {
     return <span className={`px-2 py-1 text-xs font-black rounded-full text-black shadow-sm ${cat.color}`}>{cat.label}</span>;
   };
 
+  // 賽事專用圖片輪播元件
   const ImageCarousel = ({ tournament }) => {
     const imgs = Array.isArray(tournament.images) && tournament.images.length > 0 
       ? tournament.images 
@@ -316,7 +317,6 @@ export default function App() {
 
     return (
       <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
-        {/* 恢復為充滿版面、高度自適應，不再強制裁切成正方形 */}
         <img src={imgs[safeIdx]} alt="賽事圖片" className="w-full h-auto object-cover" />
         
         {imgs.length > 1 && (
@@ -327,6 +327,76 @@ export default function App() {
               {imgs.map((_, i) => <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all ${i === safeIdx ? 'bg-white scale-125 shadow-md' : 'bg-white/50'}`} />)}
             </div>
           </>
+        )}
+      </div>
+    );
+  };
+
+  // 💡 特助升級：專屬於新手教學的「半透明露邊 (Cover Flow)」沉浸式輪播元件
+  const TutorialCarousel = ({ banners, tutorialIdx, setTutorialIdx }) => {
+    if (!banners || banners.length === 0) {
+      return (
+        <div className="rounded-2xl shadow-md aspect-square bg-orange-50 flex items-center justify-center border-2 border-orange-100">
+           <div className="text-center p-8 text-gray-400 font-bold flex flex-col items-center gap-3"><ImageIcon className="w-16 h-16 opacity-20" /> 新手福利圖準備中...🚀</div>
+        </div>
+      );
+    }
+
+    const safeIdx = tutorialIdx % Math.max(banners.length, 1);
+    const banner = banners[safeIdx];
+    if (!banner) return null;
+
+    const prevIdx = (safeIdx - 1 + banners.length) % banners.length;
+    const nextIdx = (safeIdx + 1) % banners.length;
+
+    return (
+      <div className="mb-6 flex flex-col items-center">
+        {/* 沉浸式相框容器 */}
+        <div className="relative w-full py-5 bg-orange-50/50 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 shadow-inner min-h-[250px]">
+          
+          {/* 左側半透明預覽圖 */}
+          {banners.length > 1 && (
+            <div
+              className="absolute right-[82%] w-[75%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
+              onClick={() => setTutorialIdx(prevIdx)}
+            >
+              <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-cover" />
+              <div className="absolute inset-0 flex items-center justify-end pr-2 bg-gradient-to-l from-black/20 to-transparent">
+                <ChevronLeft className="w-8 h-8 text-white drop-shadow-lg" />
+              </div>
+            </div>
+          )}
+
+          {/* 中央主視覺圖 */}
+          <div className="relative z-10 w-[75%] aspect-square rounded-2xl overflow-hidden shadow-xl border-2 border-white transition-all duration-500 bg-white">
+            <img src={banner.url} alt="教學圖" className="w-full h-full object-cover" />
+            {/* 💡 標籤完美降落到左下角，不再擋住標題 Logo！ */}
+            <div className="absolute bottom-3 left-3 bg-black/70 text-white text-[11px] font-black px-3 py-1.5 rounded-full flex items-center gap-1 backdrop-blur-md shadow-sm">
+              <Sparkles className="w-3 h-3 text-yellow-400" /> {banner.title} 專屬福利
+            </div>
+          </div>
+
+          {/* 右側半透明預覽圖 */}
+          {banners.length > 1 && (
+            <div
+              className="absolute left-[82%] w-[75%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
+              onClick={() => setTutorialIdx(nextIdx)}
+            >
+              <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-cover" />
+              <div className="absolute inset-0 flex items-center justify-start pl-2 bg-gradient-to-r from-black/20 to-transparent">
+                <ChevronRight className="w-8 h-8 text-white drop-shadow-lg" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 獨立到外部底部的導航點點 */}
+        {banners.length > 1 && (
+          <div className="flex justify-center gap-2 mt-4">
+            {banners.map((_, i) => (
+              <div key={i} className={`h-2 rounded-full transition-all shadow-sm cursor-pointer hover:bg-orange-400 ${i === safeIdx ? 'bg-orange-500 w-6' : 'bg-orange-200 w-2'}`} onClick={() => setTutorialIdx(i)} />
+            ))}
+          </div>
         )}
       </div>
     );
@@ -385,7 +455,7 @@ export default function App() {
               <div className="flex items-center gap-1 w-full">
                 <button onClick={() => categoryScrollRef.current?.scrollBy({ left: -200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center hover:bg-orange-50 active:scale-95 transition-all"><ChevronLeft className="w-5 h-5 -ml-0.5" /></button>
                 <div ref={categoryScrollRef} className="flex-1 flex gap-2 overflow-x-auto pb-2 pt-1 px-1 hide-scrollbar scroll-smooth">
-                  {[{ id: 'All', label: '全部', color: 'bg-white border border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color }))].map(cat => (
+                  {[{ id: 'All', label: '全部', color: 'bg-white border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color }))].map(cat => (
                     <button key={cat.id} onClick={() => togglePlayerFilter(cat.id)} className={`whitespace-nowrap px-4 py-2 rounded-full text-sm font-black transition-all shadow-sm text-black ${cat.color} ${playerFilters.includes(cat.id) ? 'ring-2 ring-black ring-offset-1 scale-105 opacity-100' : 'opacity-60 hover:opacity-100'}`}>{cat.label}</button>
                   ))}
                 </div>
@@ -431,7 +501,7 @@ export default function App() {
               );
             })()}
 
-            {/* 行事曆內容 (修復點點顏色問題) */}
+            {/* 行事曆內容 */}
             {viewMode === 'calendar' && (
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-4">
@@ -466,7 +536,6 @@ export default function App() {
                           <span className={`text-sm font-bold ${events.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
                           {events.length > 0 && (
                             <div className="flex gap-0.5 mt-1">
-                              {/* 💡 修復：動態顯示各遊戲對應顏色的點點 */}
                               {events.slice(0, 3).map((e, i) => {
                                 const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
                                 return <span key={i} className={`w-1.5 h-1.5 rounded-full ${getDotColor(catColor)} shadow-sm`} />
@@ -515,43 +584,19 @@ export default function App() {
               </div>
             )}
             
-            {/* 新手教學區 (Banner 輪播保持正方形 aspect-square，適合店長的圖) */}
+            {/* 新手教學區 */}
             <div id="tutorial-section" className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
               <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-3 py-1.5 rounded-bl-xl shadow-sm">新手福利區</div>
               <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-4"><BookOpen className="w-6 h-6 text-orange-500" /> 預約新手教學 🎓</h2>
               
-              <div className="mb-6 relative rounded-2xl overflow-hidden shadow-md aspect-square bg-orange-50 flex items-center justify-center border-2 border-orange-100 group">
-                {tutorialBanners.length > 0 ? (
-                  (() => {
-                    const safeIdx = tutorialIdx % Math.max(tutorialBanners.length, 1);
-                    const banner = tutorialBanners[safeIdx] || tutorialBanners[0];
-                    if(!banner) return null;
-                    return (
-                      <>
-                        <img src={banner.url} alt="教學圖" className="w-full h-full object-cover transition-opacity duration-500" />
-                        <div className="absolute top-3 left-3 bg-black/70 text-white text-xs font-black px-3 py-1.5 rounded-full flex items-center gap-1 backdrop-blur-md shadow-sm"><Sparkles className="w-4 h-4 text-yellow-400" /> {banner.title} 專屬福利</div>
-                        
-                        {/* 左右導航按鈕 (預設隱藏，hover顯示) */}
-                        {tutorialBanners.length > 1 && (
-                          <div className="absolute inset-0 flex items-center justify-between px-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                            <button onClick={() => setTutorialIdx((tutorialIdx - 1 + tutorialBanners.length) % tutorialBanners.length)} className="w-10 h-10 bg-white/90 text-orange-600 rounded-full flex items-center justify-center shadow-lg hover:bg-white hover:scale-110 active:scale-95 transition-all"><ChevronLeft className="w-6 h-6 -ml-0.5"/></button>
-                            <button onClick={() => setTutorialIdx((tutorialIdx + 1) % tutorialBanners.length)} className="w-10 h-10 bg-white/90 text-orange-600 rounded-full flex items-center justify-center shadow-lg hover:bg-white hover:scale-110 active:scale-95 transition-all"><ChevronRight className="w-6 h-6 -mr-0.5"/></button>
-                          </div>
-                        )}
-                        
-                        {/* 底部點點 */}
-                        {tutorialBanners.length > 1 && (
-                          <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-2">
-                            {tutorialBanners.map((_, i) => <div key={i} className={`h-2 rounded-full transition-all shadow-sm ${i === safeIdx ? 'bg-white w-6' : 'bg-white/50 w-2'}`} />)}
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()
-                ) : (
-                  <div className="text-center p-8 text-gray-400 font-bold flex flex-col items-center gap-3"><ImageIcon className="w-16 h-16 opacity-20" /> 新手福利圖準備中...🚀</div>
-                )}
+              <div className="px-1 mb-3">
+                <span className="text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-100 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-sm">
+                  💡 點擊兩側圖片，即可快速切換觀看各遊戲福利！
+                </span>
               </div>
+              
+              {/* 💡 呼叫特助為您量身打造的 Cover Flow 預覽輪播元件 */}
+              <TutorialCarousel banners={tutorialBanners} tutorialIdx={tutorialIdx} setTutorialIdx={setTutorialIdx} />
 
               <div className="mb-6 space-y-4 bg-orange-50 p-5 rounded-xl border border-orange-100 shadow-sm">
                 <div>
@@ -589,7 +634,7 @@ export default function App() {
         )}
 
         {/* ========================================== */}
-        {/* 店家後台 (Admin) */}
+        {/* 店家後台 (Admin View) */}
         {/* ========================================== */}
         {currentView === 'admin' && (
           <div className="space-y-6">
@@ -611,15 +656,20 @@ export default function App() {
                   <button onClick={() => setIsAdminAuth(false)} className="bg-white text-orange-600 p-2.5 rounded-xl shadow-sm hover:bg-orange-50 active:scale-90 transition-all"><LogOut className="w-5 h-5" /></button>
                 </div>
                 
-                {/* 系統狀態提示 */}
                 <div className="bg-blue-600 text-white p-5 rounded-2xl shadow-md font-black flex items-center justify-between">
                   <span className="text-lg">🚀 系統連線狀態：正常運作中</span>
                   <Sparkles className="w-6 h-6 animate-pulse text-yellow-300" />
                 </div>
                 
-                {/* 教學圖管理 */}
+                {/* 教學圖管理區塊也套用 Cover Flow 預覽 */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
                   <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 新手教學福利圖管理</h2>
+                  
+                  <div className="mb-6">
+                    <p className="text-xs text-gray-500 font-bold mb-2">前台玩家畫面預覽：</p>
+                    <TutorialCarousel banners={tutorialBanners} tutorialIdx={tutorialIdx} setTutorialIdx={setTutorialIdx} />
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     {tutorialBanners.map(b => (
                       <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm">
@@ -630,8 +680,8 @@ export default function App() {
                         </div>
                       </div>
                     ))}
-                    {tutorialBanners.length === 0 && <div className="col-span-full py-10 text-center text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-xl">目前還沒有教學圖喔，快在下方新增！👇</div>}
                   </div>
+
                   <form onSubmit={handleAddTutorialBanner} className="space-y-4 bg-blue-50 p-5 rounded-xl border border-blue-100 shadow-inner">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div><label className="text-xs font-bold text-blue-800 block mb-2">對應遊戲名稱</label><input required type="text" placeholder="例如: 寶可夢" className="w-full p-3 border border-blue-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" value={newTutorialBanner.title} onChange={e => setNewTutorialBanner({...newTutorialBanner, title: e.target.value})} /></div>
@@ -709,7 +759,7 @@ export default function App() {
                     <button onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)} className="text-xs font-bold text-gray-500 hover:text-orange-600 border border-gray-200 bg-white px-3 py-1.5 rounded-lg shadow-sm transition-colors">改以「{weekStartsOnMonday ? '週日' : '週一'}」為起始</button>
                   </div>
                   
-                  {/* 💡 修復：後台月曆補上星期標題 */}
+                  {/* 星期標題 */}
                   <div className="grid grid-cols-7 gap-1 mb-2 text-center text-xs font-black text-gray-400">
                     {weekHeaders.map(h => <div key={h}>{h}</div>)}
                   </div>
@@ -730,7 +780,7 @@ export default function App() {
                             <span className={`text-sm font-bold ${evs.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
                             {evs.length > 0 && (
                               <div className="flex gap-0.5 mt-1">
-                                {/* 💡 修復：後台點點顏色也跟前台一樣自動抓取對應遊戲色 */}
+                                {/* 後台點點也同步遊戲專屬顏色 */}
                                 {evs.slice(0,3).map((e, i) => {
                                   const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
                                   return <span key={i} className={`w-1.5 h-1.5 rounded-full ${getDotColor(catColor)} shadow-sm`}></span>
