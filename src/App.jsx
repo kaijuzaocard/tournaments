@@ -354,37 +354,37 @@ export default function App() {
         {/* 沉浸式相框容器 */}
         <div className="relative w-full py-5 bg-orange-50/50 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 shadow-inner min-h-[250px]">
           
-          {/* 左側半透明預覽圖 */}
+          {/* 左側半透明預覽圖：往左退讓，給中央更多空間 */}
           {banners.length > 1 && (
             <div
-              className="absolute right-[82%] w-[75%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
+              className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
               onClick={() => setTutorialIdx(prevIdx)}
             >
               <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 flex items-center justify-end pr-2 bg-gradient-to-l from-black/20 to-transparent">
-                <ChevronLeft className="w-8 h-8 text-white drop-shadow-lg" />
+              <div className="absolute inset-0 flex items-center justify-end pr-1 bg-gradient-to-l from-black/20 to-transparent">
+                <ChevronLeft className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
             </div>
           )}
 
-          {/* 中央主視覺圖 */}
-          <div className="relative z-10 w-[75%] aspect-square rounded-2xl overflow-hidden shadow-xl border-2 border-white transition-all duration-500 bg-white">
+          {/* 中央主視覺圖：大幅放大至 85% 佔比 */}
+          <div className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-xl border-2 border-white transition-all duration-500 bg-white">
             <img src={banner.url} alt="教學圖" className="w-full h-full object-cover" />
-            {/* 💡 標籤完美降落到左下角，不再擋住標題 Logo！ */}
-            <div className="absolute bottom-3 left-3 bg-black/70 text-white text-[11px] font-black px-3 py-1.5 rounded-full flex items-center gap-1 backdrop-blur-md shadow-sm">
-              <Sparkles className="w-3 h-3 text-yellow-400" /> {banner.title} 專屬福利
+            {/* 💡 標籤移回左上角並縮小，降低視覺干擾 */}
+            <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm">
+              <Sparkles className="w-2.5 h-2.5 text-yellow-400" /> {banner.title} 福利
             </div>
           </div>
 
-          {/* 右側半透明預覽圖 */}
+          {/* 右側半透明預覽圖：往右退讓，給中央更多空間 */}
           {banners.length > 1 && (
             <div
-              className="absolute left-[82%] w-[75%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
+              className="absolute left-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
               onClick={() => setTutorialIdx(nextIdx)}
             >
               <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 flex items-center justify-start pl-2 bg-gradient-to-r from-black/20 to-transparent">
-                <ChevronRight className="w-8 h-8 text-white drop-shadow-lg" />
+              <div className="absolute inset-0 flex items-center justify-start pl-1 bg-gradient-to-r from-black/20 to-transparent">
+                <ChevronRight className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
             </div>
           )}
