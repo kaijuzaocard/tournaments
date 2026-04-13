@@ -352,10 +352,10 @@ export default function App() {
         <div className="relative w-full py-5 bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 shadow-inner h-[280px]">
           {banners.length > 1 && (
             <div
-              className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
+              className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md bg-white"
               onClick={() => setTutorialIdx(prevIdx)}
             >
-              <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-cover" />
+              <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-contain" />
               <div className="absolute inset-0 flex items-center justify-end pr-1 bg-gradient-to-l from-black/40 to-transparent">
                 <ChevronLeft className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
@@ -366,9 +366,9 @@ export default function App() {
             className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-2xl border-4 border-white transition-all duration-500 bg-white group cursor-zoom-in hover:scale-[1.02]"
             onClick={() => setFullscreenImage(banner.url)}
           >
-            <img src={banner.url} alt="教學圖" className="w-full h-full object-cover" />
-            <div className="absolute top-2 left-2 bg-black/80 text-white text-[10px] font-black px-2.5 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm border border-white/20">
-              <Sparkles className="w-3 h-3 text-yellow-400" /> {banner.title} 福利
+            <img src={banner.url} alt="教學圖" className="w-full h-full object-contain" />
+            <div className="absolute top-2 left-2 bg-black/80 text-white text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm border border-white/20">
+              <Sparkles className="w-2.5 h-2.5 text-yellow-400" /> {banner.title} 福利
             </div>
             
             {/* 懸停放大提示 */}
@@ -381,10 +381,10 @@ export default function App() {
 
           {banners.length > 1 && (
             <div
-              className="absolute left-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
+              className="absolute left-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md bg-white"
               onClick={() => setTutorialIdx(nextIdx)}
             >
-              <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-cover" />
+              <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-contain" />
               <div className="absolute inset-0 flex items-center justify-start pl-1 bg-gradient-to-r from-black/40 to-transparent">
                 <ChevronRight className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
