@@ -69,6 +69,9 @@ export default function App() {
   const [editFormData, setEditFormData] = useState(null);
 
   const categoryScrollRef = useRef(null);
+  
+  // 💡 特助加碼：記錄是否已經抽過開局盲盒，避免資料庫更新時畫面亂跳
+  const hasRandomizedBanner = useRef(false);
 
   // 全域防卡死機制
   useEffect(() => {
@@ -77,6 +80,15 @@ export default function App() {
     }, 2500);
     return () => clearTimeout(fallbackTimer);
   }, []);
+
+  // 💡 特助升級：當讀取到新手教學圖時，進行開局一次性隨機展示
+  useEffect(() => {
+    if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
+      const randomStartIdx = Math.floor(Math.random() * tutorialBanners.length);
+      setTutorialIdx(randomStartIdx);
+      hasRandomizedBanner.current = true;
+    }
+  }, [tutorialBanners]);
 
   // ==========================================
   // 🔐 處理身份驗證
@@ -304,7 +316,6 @@ export default function App() {
     return <span className={`px-2 py-1 text-xs font-black rounded-full text-black shadow-sm ${cat.color}`}>{cat.label}</span>;
   };
 
-  // 賽事專用圖片輪播元件
   const ImageCarousel = ({ tournament }) => {
     const imgs = Array.isArray(tournament.images) && tournament.images.length > 0 
       ? tournament.images 
@@ -332,7 +343,6 @@ export default function App() {
     );
   };
 
-  // 💡 特助升級：專屬於新手教學的「半透明露邊 (Cover Flow)」沉浸式輪播元件
   const TutorialCarousel = ({ banners, tutorialIdx, setTutorialIdx }) => {
     if (!banners || banners.length === 0) {
       return (
@@ -351,10 +361,7 @@ export default function App() {
 
     return (
       <div className="mb-6 flex flex-col items-center">
-        {/* 沉浸式相框容器 */}
         <div className="relative w-full py-5 bg-orange-50/50 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 shadow-inner min-h-[250px]">
-          
-          {/* 左側半透明預覽圖：往左退讓，給中央更多空間 */}
           {banners.length > 1 && (
             <div
               className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
@@ -367,16 +374,13 @@ export default function App() {
             </div>
           )}
 
-          {/* 中央主視覺圖：大幅放大至 85% 佔比 */}
           <div className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-xl border-2 border-white transition-all duration-500 bg-white">
             <img src={banner.url} alt="教學圖" className="w-full h-full object-cover" />
-            {/* 💡 標籤移回左上角並縮小，降低視覺干擾 */}
             <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm">
               <Sparkles className="w-2.5 h-2.5 text-yellow-400" /> {banner.title} 福利
             </div>
           </div>
 
-          {/* 右側半透明預覽圖：往右退讓，給中央更多空間 */}
           {banners.length > 1 && (
             <div
               className="absolute left-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md"
@@ -390,7 +394,6 @@ export default function App() {
           )}
         </div>
 
-        {/* 獨立到外部底部的導航點點 */}
         {banners.length > 1 && (
           <div className="flex justify-center gap-2 mt-4">
             {banners.map((_, i) => (
@@ -443,7 +446,6 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-3">
-              {/* 隱藏原生捲動條的 CSS */}
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
               
               <div className="flex flex-wrap gap-2 px-1">
@@ -451,7 +453,6 @@ export default function App() {
                 <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 px-2 py-1 rounded-md inline-flex items-center shadow-sm active:scale-95 transition-all">🎓 預約新手教學 👉</button>
               </div>
 
-              {/* 美感回歸：分類滑動按鈕區塊 */}
               <div className="flex items-center gap-1 w-full">
                 <button onClick={() => categoryScrollRef.current?.scrollBy({ left: -200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center hover:bg-orange-50 active:scale-95 transition-all"><ChevronLeft className="w-5 h-5 -ml-0.5" /></button>
                 <div ref={categoryScrollRef} className="flex-1 flex gap-2 overflow-x-auto pb-2 pt-1 px-1 hide-scrollbar scroll-smooth">
@@ -462,7 +463,6 @@ export default function App() {
                 <button onClick={() => categoryScrollRef.current?.scrollBy({ left: 200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center hover:bg-orange-50 active:scale-95 transition-all"><ChevronRight className="w-5 h-5 -mr-0.5" /></button>
               </div>
 
-              {/* 列表 / 行事曆 切換 */}
               <div className="flex bg-gray-200 p-1.5 rounded-xl">
                 <button onClick={() => setViewMode('list')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'list' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><LayoutList className="w-4 h-4" /> 列表</button>
                 <button onClick={() => setViewMode('calendar')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'calendar' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Calendar className="w-4 h-4" /> 行事曆</button>
@@ -595,7 +595,6 @@ export default function App() {
                 </span>
               </div>
               
-              {/* 💡 呼叫特助為您量身打造的 Cover Flow 預覽輪播元件 */}
               <TutorialCarousel banners={tutorialBanners} tutorialIdx={tutorialIdx} setTutorialIdx={setTutorialIdx} />
 
               <div className="mb-6 space-y-4 bg-orange-50 p-5 rounded-xl border border-orange-100 shadow-sm">
@@ -661,7 +660,7 @@ export default function App() {
                   <Sparkles className="w-6 h-6 animate-pulse text-yellow-300" />
                 </div>
                 
-                {/* 教學圖管理區塊也套用 Cover Flow 預覽 */}
+                {/* 教學圖管理 */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
                   <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 新手教學福利圖管理</h2>
                   
