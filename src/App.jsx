@@ -70,7 +70,7 @@ export default function App() {
 
   const categoryScrollRef = useRef(null);
   
-  // 💡 特助加碼：記錄是否已經抽過開局盲盒，避免資料庫更新時畫面亂跳
+  // 記錄是否已經抽過開局盲盒，避免資料庫更新時畫面亂跳
   const hasRandomizedBanner = useRef(false);
 
   // 全域防卡死機制
@@ -81,7 +81,7 @@ export default function App() {
     return () => clearTimeout(fallbackTimer);
   }, []);
 
-  // 💡 特助升級：當讀取到新手教學圖時，進行開局一次性隨機展示
+  // 當讀取到新手教學圖時，進行開局一次性隨機展示
   useEffect(() => {
     if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
       const randomStartIdx = Math.floor(Math.random() * tutorialBanners.length);
@@ -181,6 +181,14 @@ export default function App() {
   // ==========================================
   // 🎮 邏輯處理
   // ==========================================
+
+  // 💡 特助修復：加回被我不小心刪掉的詳細資訊開關引擎，並加上防呆處理！
+  const toggleNote = (e, id) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
   const compressImage = (file) => {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -283,6 +291,22 @@ export default function App() {
       });
       setNewCategoryName('');
     } catch (error) { console.error(error); }
+  };
+
+  const handleSavePreset = async () => {
+    if (!user || !newPresetTitle.trim() || !formData.description.trim()) return;
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'note_presets'), {
+        title: newPresetTitle.trim(), content: formData.description.trim(), createdAt: new Date().toISOString()
+      });
+      setNewPresetTitle('');
+    } catch (error) { console.error("Error saving preset: ", error); }
+  };
+
+  const handleDeletePreset = async (id) => {
+    if (!user) return;
+    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'note_presets', id)); } 
+    catch (error) { console.error("Error deleting preset: ", error); }
   };
 
   // ==========================================
@@ -449,8 +473,8 @@ export default function App() {
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
               
               <div className="flex flex-wrap gap-2 px-1">
-                <span className="text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-1 rounded-md inline-flex items-center shadow-sm">💡 分類按鈕可「多選」篩選！</span>
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 px-2 py-1 rounded-md inline-flex items-center shadow-sm active:scale-95 transition-all">🎓 預約新手教學 👉</button>
+                <span className="text-[10px] font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm">💡 分類按鈕可「多選」篩選！</span>
+                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="text-[10px] font-bold text-white bg-orange-500 hover:bg-orange-600 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm active:scale-95 transition-all">🎓 預約新手教學 👉</button>
               </div>
 
               <div className="flex items-center gap-1 w-full">
@@ -484,9 +508,10 @@ export default function App() {
                       <h3 className="text-lg font-black text-gray-800 mb-2">{t.title}</h3>
                       <div className="flex items-center gap-2 text-sm text-gray-600 mb-3 bg-gray-50 p-3 rounded-lg border border-gray-100"><Zap className="w-5 h-5 text-yellow-500" /><span className="font-bold">報名費/方案：{t.fee}</span></div>
                       
-                      {((Array.isArray(t.images) && t.images.length > 0) || t.image || t.description) && (
+                      {((Array.isArray(t.images) && t.images.length > 0) || t.image || (t.description && t.description.trim())) && (
                         <div className="mt-2">
-                          <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2.5 rounded-xl flex justify-center items-center gap-1 border border-orange-100 active:scale-95 transition-all">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊點我'}</button>
+                          {/* 💡 修復：確保有 type="button" 且呼叫正確的 toggleNote */}
+                          <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2.5 rounded-xl flex justify-center items-center gap-1 border border-orange-100 active:scale-95 transition-all">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
                           {expandedNotes[t.id] && (
                             <div className="mt-3 pt-3 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
                               <ImageCarousel tournament={t} />
@@ -566,9 +591,9 @@ export default function App() {
                           </div>
                           <div className="text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg shadow-sm">{t.fee}</div>
                         </div>
-                        {((Array.isArray(t.images) && t.images.length > 0) || t.image || t.description) && (
+                        {((Array.isArray(t.images) && t.images.length > 0) || t.image || (t.description && t.description.trim())) && (
                           <div className="mt-2">
-                            <button onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2 rounded-xl flex justify-center items-center gap-1 border border-orange-100 transition-colors">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
+                            <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2 rounded-xl flex justify-center items-center gap-1 border border-orange-100 transition-colors">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
                             {expandedNotes[t.id] && (
                               <div className="mt-3 pt-3 border-t border-gray-100">
                                 <ImageCarousel tournament={t} />
@@ -679,6 +704,7 @@ export default function App() {
                         </div>
                       </div>
                     ))}
+                    {tutorialBanners.length === 0 && <div className="col-span-full py-10 text-center text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-xl">目前還沒有教學圖喔，快在下方新增！👇</div>}
                   </div>
 
                   <form onSubmit={handleAddTutorialBanner} className="space-y-4 bg-blue-50 p-5 rounded-xl border border-blue-100 shadow-inner">
@@ -712,7 +738,7 @@ export default function App() {
                   </form>
                 </div>
 
-                {/* 新增賽事 */}
+                {/* 💡 修復：新增賽事時，加入完整的備註模板管理器 */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                   <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Plus className="w-6 h-6 text-orange-500" /> 發布新賽事情報</h2>
                   <form onSubmit={handleAddTournament} className="space-y-5">
@@ -720,6 +746,7 @@ export default function App() {
                       <div><label className="text-xs font-bold text-gray-600 block mb-2">遊戲種類</label><select className="w-full p-3 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.gameType} onChange={e => setFormData({...formData, gameType: e.target.value})}>{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
                       <div><label className="text-xs font-bold text-gray-600 block mb-2">賽事名稱</label><input required type="text" placeholder="例如：寶可夢奪包賽" className="w-full p-3 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} /></div>
                     </div>
+                    
                     <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 shadow-inner">
                       <div className="flex justify-between items-center mb-3"><label className="text-sm font-black text-orange-800">🗓️ 場次日期與時間</label><button type="button" onClick={() => setSchedules([...schedules, { date: '', time: '19:00' }])} className="text-xs font-bold text-orange-700 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-orange-200 hover:bg-orange-100 active:scale-95 transition-all flex items-center gap-1"><Plus className="w-4 h-4" /> 加場次</button></div>
                       <div className="space-y-3">{schedules.map((sch, i) => (
@@ -730,8 +757,42 @@ export default function App() {
                         </div>
                       ))}</div>
                     </div>
+
                     <div><label className="text-xs font-bold text-gray-600 block mb-2">報名費或方案</label><input required type="text" placeholder="例如: 200元 或 買2包" className="w-full p-3 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.fee} onChange={e => setFormData({...formData, fee: e.target.value})} /></div>
-                    <div><label className="text-xs font-bold text-gray-600 block mb-2">備註與賽制說明</label><textarea rows="4" placeholder="填寫詳細的獎勵內容..." className="w-full p-3 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none resize-none" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} /></div>
+                    
+                    {/* 💡 修復：在此加回快捷備註模板區塊 */}
+                    <div>
+                      <label className="text-xs font-bold text-gray-600 block mb-2">備註與賽制說明</label>
+                      <div className="mb-3 p-4 bg-orange-50 border border-orange-100 rounded-xl shadow-inner">
+                        <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1">
+                          <BookmarkPlus className="w-4 h-4"/> 快捷備註模板管理
+                        </div>
+                        {notePresets.length > 0 ? (
+                          <div className="flex flex-wrap gap-2 mb-4">
+                            {notePresets.map(p => (
+                              <div key={p.id} className="flex items-center gap-1 bg-white border border-orange-200 rounded-lg px-2.5 py-1 shadow-sm">
+                                <button type="button" onClick={() => setFormData({...formData, description: p.content})} className="text-xs font-bold text-gray-700 hover:text-orange-600 transition-colors" title="點擊帶入此模板">
+                                  {p.title}
+                                </button>
+                                <button type="button" onClick={() => handleDeletePreset(p.id)} className="text-red-400 hover:text-red-600 ml-1 transition-colors" title="刪除模板">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs font-bold text-orange-600/70 mb-4">目前沒有儲存的模板喔！在下方輸入備註後即可存為模板。</p>
+                        )}
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input type="text" placeholder="替目前的備註命名 (如: 寶可夢奪包賽)" className="flex-1 p-2.5 text-xs font-bold border border-orange-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 bg-white" value={newPresetTitle} onChange={(e) => setNewPresetTitle(e.target.value)} />
+                          <button type="button" onClick={handleSavePreset} className="px-4 py-2.5 bg-orange-500 text-white text-xs font-black rounded-xl shadow-sm hover:bg-orange-600 active:scale-95 transition-all whitespace-nowrap">
+                            儲存當前備註為模板
+                          </button>
+                        </div>
+                      </div>
+                      <textarea rows="4" placeholder="填寫詳細的獎勵內容..." className="w-full p-3 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none resize-none" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} />
+                    </div>
+
                     <div>
                       <label className="text-xs font-bold text-gray-600 block mb-2 flex items-center gap-1"><ImageIcon className="w-4 h-4 text-orange-500" /> 上傳宣傳圖 (選填，最多4張)</label>
                       <input id="promo-image-upload" type="file" multiple accept="image/*" onChange={async e => { const imgs = await Promise.all(Array.from(e.target.files).slice(0, 4).map(compressImage)); setFormData({...formData, images: [...formData.images, ...imgs].slice(0, 4)}); }} className="w-full p-2 border border-gray-300 rounded-xl bg-gray-50 text-xs text-gray-500 file:bg-orange-100 file:text-orange-700 file:font-bold file:border-0 file:rounded-lg file:px-4 file:py-2 file:mr-3 cursor-pointer" />
@@ -805,7 +866,19 @@ export default function App() {
                             <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">遊戲</label><select value={editFormData.gameType} onChange={(e) => setEditFormData({...editFormData, gameType: e.target.value})} className="w-full p-2.5 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">名稱</label><input required type="text" value={editFormData.title} onChange={(e) => setEditFormData({...editFormData, title: e.target.value})} className="w-full p-2.5 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
                             <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">日期</label><input required type="date" value={editFormData.date} onChange={(e) => setEditFormData({...editFormData, date: e.target.value})} className="w-full p-2.5 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">時間</label><input required type="time" value={editFormData.time} onChange={(e) => setEditFormData({...editFormData, time: e.target.value})} className="w-full p-2.5 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
                             <div><label className="text-xs font-bold text-orange-800 block mb-1.5">費用</label><input required type="text" value={editFormData.fee} onChange={(e) => setEditFormData({...editFormData, fee: e.target.value})} className="w-full p-2.5 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-                            <div><label className="text-xs font-bold text-orange-800 block mb-1.5">備註</label><textarea rows="3" value={editFormData.description} onChange={(e) => setEditFormData({...editFormData, description: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold resize-none bg-white focus:ring-2 focus:ring-orange-500 outline-none leading-relaxed" /></div>
+                            
+                            {/* 💡 修復：編輯賽事時加入下拉選單選擇備註模板 */}
+                            <div>
+                              <div className="flex justify-between items-end mb-1.5">
+                                <label className="text-xs font-bold text-orange-800 block">備註</label>
+                                <select onChange={(e) => { if(e.target.value) setEditFormData({...editFormData, description: e.target.value})}} className="text-xs border border-orange-200 rounded-lg p-1 bg-white text-orange-700 font-bold outline-none max-w-[140px] shadow-sm cursor-pointer">
+                                  <option value="">載入模板...</option>
+                                  {notePresets.map(p => <option key={p.id} value={p.content}>{p.title}</option>)}
+                                </select>
+                              </div>
+                              <textarea rows="3" value={editFormData.description} onChange={(e) => setEditFormData({...editFormData, description: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold resize-none bg-white focus:ring-2 focus:ring-orange-500 outline-none leading-relaxed" />
+                            </div>
+
                             <div><label className="text-xs font-bold text-orange-800 block mb-1.5">圖片修改</label>
                               <input type="file" multiple accept="image/*" onChange={async (e) => {
                                 const newImgs = await Promise.all(Array.from(e.target.files).slice(0, 4).map(compressImage));
@@ -828,9 +901,19 @@ export default function App() {
                           <div key={t.id} className="p-4 bg-white shadow-sm rounded-2xl border border-gray-200 flex justify-between items-center transition-all hover:border-blue-300">
                             <div><span className={`px-2.5 py-1 text-xs font-black rounded-full shadow-sm ${categories.find(c=>c.gameType===t.gameType)?.color || 'bg-gray-200'}`}>{t.gameType}</span><div className="font-black text-gray-800 mt-2.5 text-lg">{t.title}</div><div className="text-sm text-gray-500 font-bold mt-1 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打</div></div>
                             <div className="flex gap-2 flex-col sm:flex-row">
-                              <button onClick={() => { setEditingId(t.id); setEditFormData({...t, images: Array.isArray(t.images) && t.images.length > 0 ? t.images : (t.image ? [t.image] : [])}); }} className="p-3 text-blue-600 bg-blue-50 rounded-xl hover:bg-blue-100 active:scale-90 transition-all shadow-sm flex items-center justify-center"><Edit className="w-5 h-5"/></button>
-                              <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id))} className="p-3 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-90 transition-all shadow-sm flex items-center justify-center"><Trash2 className="w-5 h-5"/></button>
+                              {/* 💡 修復：加回後台按鈕的 onClick 以及防呆 */}
+                              <button type="button" onClick={(e) => toggleNote(e, t.id)} className="p-3 text-orange-600 bg-orange-50 rounded-xl hover:bg-orange-100 active:scale-90 transition-all shadow-sm flex items-center justify-center" title="查看詳細資訊"><BookmarkPlus className="w-5 h-5"/></button>
+                              <button type="button" onClick={() => { setEditingId(t.id); setEditFormData({...t, images: Array.isArray(t.images) && t.images.length > 0 ? t.images : (t.image ? [t.image] : [])}); }} className="p-3 text-blue-600 bg-blue-50 rounded-xl hover:bg-blue-100 active:scale-90 transition-all shadow-sm flex items-center justify-center"><Edit className="w-5 h-5"/></button>
+                              <button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id))} className="p-3 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-90 transition-all shadow-sm flex items-center justify-center"><Trash2 className="w-5 h-5"/></button>
                             </div>
+                            
+                            {/* 後台也同步顯示展開的資訊 */}
+                            {expandedNotes[t.id] && (
+                              <div className="w-full mt-3 pt-3 border-t border-gray-100 col-span-full">
+                                <ImageCarousel tournament={t} />
+                                <div className="text-sm text-gray-600 font-bold whitespace-pre-line leading-relaxed">{renderTextWithLinks(t.description)}</div>
+                              </div>
+                            )}
                           </div>
                         )
                       ))}
