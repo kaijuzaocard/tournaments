@@ -73,7 +73,9 @@ export default function App() {
     { id: 't3', title: '超人', url: 'https://images.unsplash.com/photo-1594462310137-0f8128227b68?q=80&w=800&auto=format&fit=crop' }
   ]);
   const [newTutorialBanner, setNewTutorialBanner] = useState({ title: '', url: '' });
-  const [tutorialIdx, setTutorialIdx] = useState(0);
+  
+  // 💡 特助升級解法 2：開局盲盒機制！用大亂數決定初始索引，保證每次進網頁都不同！
+  const [tutorialIdx, setTutorialIdx] = useState(() => Math.floor(Math.random() * 1000));
   
   const [formData, setFormData] = useState({ gameType: 'UA', title: '', fee: '', description: '', images: [], prizeImages: [] });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
@@ -88,10 +90,8 @@ export default function App() {
   const [fullscreenImage, setFullscreenImage] = useState(null);
 
   const categoryScrollRef = useRef(null);
-  
-  const hasRandomizedBanner = useRef(false);
 
-  // 💡 預覽環境專用：自動生成假賽事展示給店長看排版
+  // 預覽環境專用：自動生成假賽事展示給店長看排版
   useEffect(() => {
     if (tournaments.length === 0) {
       const today = new Date();
@@ -120,14 +120,6 @@ export default function App() {
     }, 2500);
     return () => clearTimeout(fallbackTimer);
   }, []);
-
-  useEffect(() => {
-    if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
-      const randomStartIdx = Math.floor(Math.random() * tutorialBanners.length);
-      setTutorialIdx(randomStartIdx);
-      hasRandomizedBanner.current = true;
-    }
-  }, [tutorialBanners]);
 
   // ==========================================
   // 🔐 處理身份驗證
@@ -205,6 +197,22 @@ export default function App() {
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
+
+  // ==========================================
+  // 🧹 自動清潔工 (清理 14 天前賽事)
+  // ==========================================
+  useEffect(() => {
+    if (isAdminAuth && tournaments.length > 0 && user) {
+      const threshold = new Date();
+      threshold.setDate(threshold.getDate() - 14);
+      tournaments.forEach(t => {
+        const eventDate = new Date(`${t.date}T23:59:59`);
+        if (eventDate < threshold) {
+          deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id)).catch(() => {});
+        }
+      });
+    }
+  }, [isAdminAuth, tournaments, user]);
 
   // ==========================================
   // 🎮 邏輯處理
@@ -298,6 +306,7 @@ export default function App() {
     return <span className={`px-2 py-1 text-xs font-black rounded-full text-black shadow-sm ${cat.color}`}>{cat.label}</span>;
   };
 
+  // 賽事專用圖片輪播元件 (修復 object-contain)
   const ImageCarousel = ({ tournament }) => {
     const imgs = Array.isArray(tournament.images) && tournament.images.length > 0 
       ? tournament.images 
@@ -309,12 +318,12 @@ export default function App() {
     const safeIdx = idx % Math.max(imgs.length, 1);
 
     return (
-      <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
-        {/* 💡 游標放大提示與綁定全域預覽 */}
+      <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group bg-white flex items-center justify-center min-h-[150px]">
+        {/* 💡 強制使用 object-contain 與 bg-white，確保任何圖片都不會被切到！ */}
         <img 
           src={imgs[safeIdx]} 
           alt="主視覺圖片" 
-          className="w-full h-auto object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300"
+          className="w-full max-h-[60vh] object-contain bg-white cursor-zoom-in hover:scale-[1.02] transition-transform duration-300"
           onClick={(e) => { e.stopPropagation(); setFullscreenImage(imgs[safeIdx]); }}
         />
         
@@ -323,7 +332,7 @@ export default function App() {
             <button onClick={(e) => { e.stopPropagation(); setCurrentImgIdx(p => ({...p, [tournament.id]: (safeIdx-1+imgs.length)%imgs.length})); }} className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full shadow-sm hover:bg-black/60 transition-colors"><ChevronLeft className="w-5 h-5" /></button>
             <button onClick={(e) => { e.stopPropagation(); setCurrentImgIdx(p => ({...p, [tournament.id]: (safeIdx+1)%imgs.length})); }} className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full shadow-sm hover:bg-black/60 transition-colors"><ChevronRight className="w-5 h-5" /></button>
             <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">
-              {imgs.map((_, i) => <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all ${i === safeIdx ? 'bg-white scale-125 shadow-md' : 'bg-white/50'}`} />)}
+              {imgs.map((_, i) => <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all ${i === safeIdx ? 'bg-orange-500 scale-125 shadow-md' : 'bg-gray-300'}`} />)}
             </div>
           </>
         )}
@@ -331,6 +340,7 @@ export default function App() {
     );
   };
 
+  // 教學福利專區 Cover Flow (修復 object-contain)
   const TutorialCarousel = ({ banners, tutorialIdx, setTutorialIdx }) => {
     if (!banners || banners.length === 0) {
       return (
@@ -355,7 +365,8 @@ export default function App() {
               className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md bg-white"
               onClick={() => setTutorialIdx(prevIdx)}
             >
-              <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-contain" />
+              {/* 💡 側邊圖：強制 object-contain 防切邊 */}
+              <img src={banners[prevIdx].url} alt="上一張" className="w-full h-full object-contain bg-white" />
               <div className="absolute inset-0 flex items-center justify-end pr-1 bg-gradient-to-l from-black/40 to-transparent">
                 <ChevronLeft className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
@@ -366,12 +377,12 @@ export default function App() {
             className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-2xl border-4 border-white transition-all duration-500 bg-white group cursor-zoom-in hover:scale-[1.02]"
             onClick={() => setFullscreenImage(banner.url)}
           >
-            <img src={banner.url} alt="教學圖" className="w-full h-full object-contain" />
+            {/* 💡 中央主圖：強制 object-contain 防切邊，底部自帶高級留白 */}
+            <img src={banner.url} alt="教學圖" className="w-full h-full object-contain bg-white" />
             <div className="absolute top-2 left-2 bg-black/80 text-white text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 backdrop-blur-md shadow-sm border border-white/20">
               <Sparkles className="w-2.5 h-2.5 text-yellow-400" /> {banner.title} 福利
             </div>
             
-            {/* 懸停放大提示 */}
             <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
               <div className="bg-white/90 text-orange-600 rounded-full p-2 shadow-xl backdrop-blur-sm">
                 <ZoomIn className="w-6 h-6" />
@@ -384,7 +395,8 @@ export default function App() {
               className="absolute left-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer hover:opacity-70 transition-all duration-500 shadow-md bg-white"
               onClick={() => setTutorialIdx(nextIdx)}
             >
-              <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-contain" />
+              {/* 💡 側邊圖：強制 object-contain 防切邊 */}
+              <img src={banners[nextIdx].url} alt="下一張" className="w-full h-full object-contain bg-white" />
               <div className="absolute inset-0 flex items-center justify-start pl-1 bg-gradient-to-r from-black/40 to-transparent">
                 <ChevronRight className="w-6 h-6 text-white drop-shadow-lg" />
               </div>
@@ -490,7 +502,7 @@ export default function App() {
                               <ImageCarousel tournament={t} />
                               <div className="text-sm text-gray-600 whitespace-pre-line font-bold leading-relaxed">{renderTextWithLinks(t.description)}</div>
                               
-                              {/* 獨立獎品庫區塊 (可放大) */}
+                              {/* 獨立獎品庫區塊 (可放大 & 防切邊) */}
                               {t.prizeImages && t.prizeImages.length > 0 && (
                                 <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
                                   <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
@@ -498,13 +510,10 @@ export default function App() {
                                   </div>
                                   <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                     {t.prizeImages.map((img, i) => (
-                                      <img 
-                                        key={`prize-img-${i}`} 
-                                        src={img} 
-                                        alt={`豪華獎品 ${i+1}`} 
-                                        className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                        onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                      />
+                                      <div key={`prize-img-${i}`} className="bg-white rounded-lg border border-yellow-300 shadow-sm overflow-hidden flex items-center justify-center aspect-square cursor-zoom-in hover:scale-105 transition-transform duration-300" onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}>
+                                        {/* 💡 獎品也強制 object-contain 防止被切 */}
+                                        <img src={img} alt={`豪華獎品 ${i+1}`} className="w-full h-full object-contain" />
+                                      </div>
                                     ))}
                                   </div>
                                 </div>
@@ -596,13 +605,9 @@ export default function App() {
                                     </div>
                                     <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                       {t.prizeImages.map((img, i) => (
-                                        <img 
-                                          key={`prize-img-${i}`} 
-                                          src={img} 
-                                          alt={`豪華獎品 ${i+1}`} 
-                                          className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300"
-                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                        />
+                                        <div key={`cal-prize-img-${i}`} className="bg-white rounded-lg border border-yellow-300 shadow-sm overflow-hidden flex items-center justify-center aspect-square cursor-zoom-in hover:scale-105 transition-transform duration-300" onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}>
+                                          <img src={img} alt={`豪華獎品 ${i+1}`} className="w-full h-full object-contain" />
+                                        </div>
                                       ))}
                                     </div>
                                   </div>
@@ -705,11 +710,11 @@ export default function App() {
 
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     {tutorialBanners.map(b => (
-                      <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm">
+                      <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm flex items-center justify-center">
                         <img 
                           src={b.url} 
                           alt={b.title} 
-                          className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                          className="w-full h-full object-contain bg-white cursor-zoom-in hover:scale-105 transition-transform duration-300" 
                           onClick={(e) => { e.stopPropagation(); setFullscreenImage(b.url); }}
                         />
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-3 text-center backdrop-blur-sm pointer-events-none">
@@ -726,7 +731,7 @@ export default function App() {
                       <div><label className="text-xs font-bold text-blue-800 block mb-2">對應遊戲名稱</label><input required type="text" placeholder="例如: 寶可夢" className="w-full p-3 border border-blue-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" value={newTutorialBanner.title} onChange={e => setNewTutorialBanner({...newTutorialBanner, title: e.target.value})} /></div>
                       <div><label className="text-xs font-bold text-blue-800 block mb-2">選擇圖片檔案</label><input id="tutorial-banner-file" required type="file" accept="image/*" className="w-full text-xs bg-white border border-blue-200 p-2 rounded-xl text-gray-500 file:bg-blue-100 file:text-blue-700 file:font-bold file:border-0 file:rounded-lg file:px-3 file:py-1 file:mr-3 cursor-pointer" onChange={async e => setNewTutorialBanner({...newTutorialBanner, url: await compressImage(e.target.files[0])})} /></div>
                     </div>
-                    {newTutorialBanner.url && <img src={newTutorialBanner.url} className="h-24 w-auto rounded-lg border-2 border-blue-300 shadow-sm" />}
+                    {newTutorialBanner.url && <img src={newTutorialBanner.url} className="h-24 w-auto object-contain bg-white rounded-lg border-2 border-blue-300 shadow-sm" />}
                     <button type="submit" className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-md hover:bg-blue-700 active:scale-95 transition-all text-lg"><UploadCloud className="w-5 h-5 inline mr-1 -mt-1" /> 上傳至新手福利區</button>
                   </form>
                 </div>
@@ -811,7 +816,7 @@ export default function App() {
                           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
                             {formData.images.map((img, i) => (
                               <div key={i} className="relative flex-shrink-0">
-                                <img src={img} className="h-16 w-auto rounded-lg border-2 border-gray-200 shadow-sm" />
+                                <img src={img} className="h-16 w-auto object-contain bg-white rounded-lg border-2 border-gray-200 shadow-sm" />
                                 <button type="button" onClick={() => setFormData({...formData, images: formData.images.filter((_, idx) => idx !== i)})} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform"><X className="w-3 h-3"/></button>
                               </div>
                             ))}
@@ -830,7 +835,7 @@ export default function App() {
                           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
                             {formData.prizeImages.map((img, i) => (
                               <div key={`prize-${i}`} className="relative flex-shrink-0">
-                                <img src={img} className="h-16 w-auto rounded-lg border-2 border-yellow-300 shadow-sm" />
+                                <img src={img} className="h-16 w-auto object-contain bg-white rounded-lg border-2 border-yellow-300 shadow-sm" />
                                 <button type="button" onClick={() => setFormData({...formData, prizeImages: formData.prizeImages.filter((_, idx) => idx !== i)})} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform"><X className="w-3 h-3"/></button>
                               </div>
                             ))}
@@ -921,7 +926,7 @@ export default function App() {
                                   <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
                                     {editFormData.images.map((img, i) => (
                                       <div key={i} className="relative inline-block flex-shrink-0">
-                                        <img src={img} className="h-12 w-auto rounded border border-gray-200 object-cover shadow-sm" />
+                                        <img src={img} className="h-12 w-auto object-contain bg-white rounded border border-gray-200 shadow-sm" />
                                         <button type="button" onClick={() => { const ni = [...editFormData.images]; ni.splice(i, 1); setEditFormData({...editFormData, images: ni}); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md"><X className="w-3 h-3" /></button>
                                       </div>
                                     ))}
@@ -940,7 +945,7 @@ export default function App() {
                                   <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
                                     {editFormData.prizeImages.map((img, i) => (
                                       <div key={`edit-prize-${i}`} className="relative inline-block flex-shrink-0">
-                                        <img src={img} className="h-12 w-auto rounded border-2 border-yellow-300 object-cover shadow-sm" />
+                                        <img src={img} className="h-12 w-auto object-contain bg-white rounded border-2 border-yellow-300 shadow-sm" />
                                         <button type="button" onClick={() => { const ni = [...editFormData.prizeImages]; ni.splice(i, 1); setEditFormData({...editFormData, prizeImages: ni}); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md"><X className="w-3 h-3" /></button>
                                       </div>
                                     ))}
@@ -980,12 +985,9 @@ export default function App() {
                                     </div>
                                     <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                       {t.prizeImages.map((img, i) => (
-                                        <img 
-                                          key={`admin-prize-${i}`} 
-                                          src={img} 
-                                          className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                        />
+                                        <div key={`admin-prize-img-${i}`} className="bg-white rounded-lg border border-yellow-300 shadow-sm overflow-hidden flex items-center justify-center aspect-square cursor-zoom-in hover:scale-105 transition-transform duration-300" onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}>
+                                          <img src={img} alt={`豪華獎品 ${i+1}`} className="w-full h-full object-contain" />
+                                        </div>
                                       ))}
                                     </div>
                                   </div>
