@@ -60,7 +60,6 @@ export default function App() {
   const [newTutorialBanner, setNewTutorialBanner] = useState({ title: '', url: '' });
   const [tutorialIdx, setTutorialIdx] = useState(0);
   
-  // 💡 特助升級：表單新增 prizeImages 來儲存獨立的獎品圖片
   const [formData, setFormData] = useState({ gameType: 'UA', title: '', fee: '', description: '', images: [], prizeImages: [] });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
   const [addSuccess, setAddSuccess] = useState(false);
@@ -69,6 +68,9 @@ export default function App() {
   const [currentImgIdx, setCurrentImgIdx] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [editFormData, setEditFormData] = useState(null);
+
+  // 💡 特助升級：全域懸浮放大預覽狀態
+  const [fullscreenImage, setFullscreenImage] = useState(null);
 
   const categoryScrollRef = useRef(null);
   
@@ -353,7 +355,13 @@ export default function App() {
 
     return (
       <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
-        <img src={imgs[safeIdx]} alt="主視覺圖片" className="w-full h-auto object-cover" />
+        {/* 💡 加入游標放大提示並綁定打開大圖的事件 */}
+        <img 
+          src={imgs[safeIdx]} 
+          alt="主視覺圖片" 
+          className="w-full h-auto object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300"
+          onClick={(e) => { e.stopPropagation(); setFullscreenImage(imgs[safeIdx]); }}
+        />
         
         {imgs.length > 1 && (
           <>
@@ -446,7 +454,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 font-sans pb-12">
+    <div className="min-h-screen bg-gray-100 font-sans pb-12 relative">
       {/* 導覽列 */}
       <nav className="bg-orange-600 text-white shadow-lg sticky top-0 z-50">
         <div className="max-w-md mx-auto px-4 py-3 flex justify-between items-center">
@@ -509,7 +517,6 @@ export default function App() {
                       <h3 className="text-lg font-black text-gray-800 mb-2">{t.title}</h3>
                       <div className="flex items-center gap-2 text-sm text-gray-600 mb-3 bg-gray-50 p-3 rounded-lg border border-gray-100"><Zap className="w-5 h-5 text-yellow-500" /><span className="font-bold">報名費/方案：{t.fee}</span></div>
                       
-                      {/* 💡 只要有圖片、獎品庫或文字敘述，就顯示展開按鈕 */}
                       {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && t.description.trim())) && (
                         <div className="mt-2">
                           <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2.5 rounded-xl flex justify-center items-center gap-1 border border-orange-100 active:scale-95 transition-all">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
@@ -518,7 +525,7 @@ export default function App() {
                               <ImageCarousel tournament={t} />
                               <div className="text-sm text-gray-600 whitespace-pre-line font-bold leading-relaxed">{renderTextWithLinks(t.description)}</div>
                               
-                              {/* 💡 特助升級：專屬豪華獎品庫區塊！ */}
+                              {/* 獨立獎品庫區塊 (可放大) */}
                               {t.prizeImages && t.prizeImages.length > 0 && (
                                 <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
                                   <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
@@ -526,7 +533,13 @@ export default function App() {
                                   </div>
                                   <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                     {t.prizeImages.map((img, i) => (
-                                      <img key={`prize-img-${i}`} src={img} alt={`豪華獎品 ${i+1}`} className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover" />
+                                      <img 
+                                        key={`prize-img-${i}`} 
+                                        src={img} 
+                                        alt={`豪華獎品 ${i+1}`} 
+                                        className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                                        onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                      />
                                     ))}
                                   </div>
                                 </div>
@@ -611,7 +624,6 @@ export default function App() {
                                 <ImageCarousel tournament={t} />
                                 <div className="text-sm text-gray-600 font-bold whitespace-pre-line leading-relaxed">{renderTextWithLinks(t.description)}</div>
                                 
-                                {/* 行事曆展開也能看獎品庫 */}
                                 {t.prizeImages && t.prizeImages.length > 0 && (
                                   <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
                                     <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
@@ -619,7 +631,13 @@ export default function App() {
                                     </div>
                                     <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                       {t.prizeImages.map((img, i) => (
-                                        <img key={`prize-img-${i}`} src={img} alt={`豪華獎品 ${i+1}`} className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover" />
+                                        <img 
+                                          key={`prize-img-${i}`} 
+                                          src={img} 
+                                          alt={`豪華獎品 ${i+1}`} 
+                                          className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300"
+                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                        />
                                       ))}
                                     </div>
                                   </div>
@@ -711,6 +729,38 @@ export default function App() {
                   <Sparkles className="w-6 h-6 animate-pulse text-yellow-300" />
                 </div>
                 
+                {/* 教學圖管理 */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
+                  <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 新手教學福利圖管理</h2>
+                  
+                  <div className="mb-6">
+                    <p className="text-xs text-gray-500 font-bold mb-2">前台玩家畫面預覽：</p>
+                    <TutorialCarousel banners={tutorialBanners} tutorialIdx={tutorialIdx} setTutorialIdx={setTutorialIdx} />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    {tutorialBanners.map(b => (
+                      <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm">
+                        <img src={b.url} alt={b.title} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-3 text-center backdrop-blur-sm">
+                          <span className="text-white text-xs font-black mb-3 border border-white/50 px-3 py-1 rounded-full">{b.title}</span>
+                          <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners', b.id))} className="bg-red-500 text-white p-2.5 rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all"><Trash2 className="w-5 h-5" /></button>
+                        </div>
+                      </div>
+                    ))}
+                    {tutorialBanners.length === 0 && <div className="col-span-full py-10 text-center text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-xl">目前還沒有教學圖喔，快在下方新增！👇</div>}
+                  </div>
+
+                  <form onSubmit={handleAddTutorialBanner} className="space-y-4 bg-blue-50 p-5 rounded-xl border border-blue-100 shadow-inner">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div><label className="text-xs font-bold text-blue-800 block mb-2">對應遊戲名稱</label><input required type="text" placeholder="例如: 寶可夢" className="w-full p-3 border border-blue-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" value={newTutorialBanner.title} onChange={e => setNewTutorialBanner({...newTutorialBanner, title: e.target.value})} /></div>
+                      <div><label className="text-xs font-bold text-blue-800 block mb-2">選擇圖片檔案</label><input id="tutorial-banner-file" required type="file" accept="image/*" className="w-full text-xs bg-white border border-blue-200 p-2 rounded-xl text-gray-500 file:bg-blue-100 file:text-blue-700 file:font-bold file:border-0 file:rounded-lg file:px-3 file:py-1 file:mr-3 cursor-pointer" onChange={async e => setNewTutorialBanner({...newTutorialBanner, url: await compressImage(e.target.files[0])})} /></div>
+                    </div>
+                    {newTutorialBanner.url && <img src={newTutorialBanner.url} className="h-24 w-auto rounded-lg border-2 border-blue-300 shadow-sm" />}
+                    <button type="submit" className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-md hover:bg-blue-700 active:scale-95 transition-all text-lg"><UploadCloud className="w-5 h-5 inline mr-1 -mt-1" /> 上傳至新手福利區</button>
+                  </form>
+                </div>
+
                 {/* 遊戲分類管理 */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                   <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Tags className="w-6 h-6 text-orange-500" /> 遊戲分類標籤管理</h2>
@@ -799,7 +849,7 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* 💡 特助升級：上傳獨立豪華獎品庫 */}
+                      {/* 上傳獨立豪華獎品庫 */}
                       <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
                         <label className="text-xs font-black text-yellow-800 block mb-2 flex items-center gap-1.5"><Gift className="w-4 h-4 text-yellow-600" /> 獨立豪華獎品庫 (最多4張)</label>
                         <input type="file" multiple accept="image/*" onChange={async e => { 
@@ -936,7 +986,6 @@ export default function App() {
                             <div><span className={`px-2.5 py-1 text-xs font-black rounded-full shadow-sm ${categories.find(c=>c.gameType===t.gameType)?.color || 'bg-gray-200'}`}>{t.gameType}</span><div className="font-black text-gray-800 mt-2.5 text-lg">{t.title}</div><div className="text-sm text-gray-500 font-bold mt-1 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打</div></div>
                             <div className="flex gap-2 flex-col sm:flex-row">
                               <button type="button" onClick={(e) => toggleNote(e, t.id)} className="p-3 text-orange-600 bg-orange-50 rounded-xl hover:bg-orange-100 active:scale-90 transition-all shadow-sm flex items-center justify-center" title="查看詳細資訊"><BookmarkPlus className="w-5 h-5"/></button>
-                              {/* 💡 修復編輯資料初始化：同時將 prizeImages 帶入編輯模式 */}
                               <button type="button" onClick={() => { 
                                 setEditingId(t.id); 
                                 setEditFormData({
@@ -961,7 +1010,12 @@ export default function App() {
                                     </div>
                                     <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                       {t.prizeImages.map((img, i) => (
-                                        <img key={`admin-prize-${i}`} src={img} className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover" />
+                                        <img 
+                                          key={`admin-prize-${i}`} 
+                                          src={img} 
+                                          className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                        />
                                       ))}
                                     </div>
                                   </div>
@@ -973,59 +1027,6 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                </div>
-
-                {/* 教學圖管理 */}
-                <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
-                  <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 新手教學福利圖管理</h2>
-                  
-                  <div className="mb-6">
-                    <p className="text-xs text-gray-500 font-bold mb-2">前台玩家畫面預覽：</p>
-                    <TutorialCarousel banners={tutorialBanners} tutorialIdx={tutorialIdx} setTutorialIdx={setTutorialIdx} />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 mb-6">
-                    {tutorialBanners.map(b => (
-                      <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm">
-                        <img src={b.url} alt={b.title} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-3 text-center backdrop-blur-sm">
-                          <span className="text-white text-xs font-black mb-3 border border-white/50 px-3 py-1 rounded-full">{b.title}</span>
-                          <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners', b.id))} className="bg-red-500 text-white p-2.5 rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all"><Trash2 className="w-5 h-5" /></button>
-                        </div>
-                      </div>
-                    ))}
-                    {tutorialBanners.length === 0 && <div className="col-span-full py-10 text-center text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-xl">目前還沒有教學圖喔，快在下方新增！👇</div>}
-                  </div>
-
-                  <form onSubmit={handleAddTutorialBanner} className="space-y-4 bg-blue-50 p-5 rounded-xl border border-blue-100 shadow-inner">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div><label className="text-xs font-bold text-blue-800 block mb-2">對應遊戲名稱</label><input required type="text" placeholder="例如: 寶可夢" className="w-full p-3 border border-blue-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" value={newTutorialBanner.title} onChange={e => setNewTutorialBanner({...newTutorialBanner, title: e.target.value})} /></div>
-                      <div><label className="text-xs font-bold text-blue-800 block mb-2">選擇圖片檔案</label><input id="tutorial-banner-file" required type="file" accept="image/*" className="w-full text-xs bg-white border border-blue-200 p-2 rounded-xl text-gray-500 file:bg-blue-100 file:text-blue-700 file:font-bold file:border-0 file:rounded-lg file:px-3 file:py-1 file:mr-3 cursor-pointer" onChange={async e => setNewTutorialBanner({...newTutorialBanner, url: await compressImage(e.target.files[0])})} /></div>
-                    </div>
-                    {newTutorialBanner.url && <img src={newTutorialBanner.url} className="h-24 w-auto rounded-lg border-2 border-blue-300 shadow-sm" />}
-                    <button type="submit" className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-md hover:bg-blue-700 active:scale-95 transition-all text-lg"><UploadCloud className="w-5 h-5 inline mr-1 -mt-1" /> 上傳至新手福利區</button>
-                  </form>
-                </div>
-
-                {/* 遊戲分類管理 */}
-                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
-                  <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Tags className="w-6 h-6 text-orange-500" /> 遊戲分類標籤管理</h2>
-                  <div className="flex flex-wrap gap-3 mb-5">
-                    {categories.map(cat => (
-                      <div key={cat.id} className={`flex items-center gap-1 border border-black/10 rounded-xl py-1.5 pl-3 pr-1.5 text-sm font-black text-black shadow-sm ${cat.color || 'bg-gray-100'}`}>
-                        <span>{cat.label}</span>
-                        <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'game_categories', cat.id))} className="p-1 text-black/40 hover:text-red-600 hover:bg-black/10 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
-                      </div>
-                    ))}
-                    {categories.length === 0 && <span className="text-sm text-gray-400 font-bold py-2">無自訂分類，請在下方新增👇</span>}
-                  </div>
-                  <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row gap-3 items-end border-t border-gray-100 pt-5">
-                    <div className="flex-1 w-full sm:w-auto"><label className="block text-xs font-bold text-gray-500 mb-2">標籤名稱</label><input required type="text" placeholder="例如: 航海王" value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} className="w-full p-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-gray-50 font-bold" /></div>
-                    <div className="w-full sm:w-40"><label className="block text-xs font-bold text-gray-500 mb-2">標籤底色</label><select value={newCategoryColor} onChange={e => setNewCategoryColor(e.target.value)} className="w-full p-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-gray-50 font-bold">
-                        <option value="bg-red-200">🔴 紅色</option><option value="bg-orange-200">🟠 橙色</option><option value="bg-yellow-200">🟡 黃色</option><option value="bg-green-200">🟢 綠色</option><option value="bg-blue-200">🔵 藍色</option><option value="bg-indigo-200">🟣 靛色</option><option value="bg-purple-200">🟪 紫色</option><option value="bg-gray-400">⚫ 黑色</option><option value="bg-white border border-gray-300">⚪ 白色</option>
-                      </select></div>
-                    <button type="submit" className="w-full sm:w-auto px-5 py-3 bg-orange-100 text-orange-700 hover:bg-orange-200 font-black rounded-xl transition-colors whitespace-nowrap active:scale-95 shadow-sm">新增分類</button>
-                  </form>
                 </div>
 
                 {/* 教學預約單 */}
@@ -1060,6 +1061,33 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* 🔍 全域放大圖片懸浮視窗 (Lightbox) */}
+      {fullscreenImage && (
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+          onClick={() => setFullscreenImage(null)}
+        >
+          <div className="relative max-w-full max-h-full flex flex-col items-center">
+            <button 
+              className="absolute -top-12 right-0 text-white/70 hover:text-white bg-black/50 hover:bg-black/80 p-2 rounded-full transition-colors"
+              onClick={() => setFullscreenImage(null)}
+              title="關閉放大"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <img 
+              src={fullscreenImage} 
+              alt="放大預覽" 
+              className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl animate-in zoom-in-95 duration-200 cursor-zoom-out" 
+              onClick={(e) => {
+                e.stopPropagation();
+                setFullscreenImage(null);
+              }} 
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
