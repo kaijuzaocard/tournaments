@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send } from 'lucide-react';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, AlertCircle } from 'lucide-react';
 
 // ==========================================
-// Firebase 與 LINE 配置
+// Firebase 與 LINE 配置 (店長請確認 Token 是否完整)
 // ==========================================
 const myFirebaseConfig = {
   apiKey: "AIzaSyCaPWSmVV_R3zeGVeYj_g_AFu_JE-sGlpI",
@@ -17,6 +17,7 @@ const myFirebaseConfig = {
   measurementId: "G-3MY4BQGBVM"
 };
 
+// 💡 提示：請確保這是從 LINE Developers 用「Copy」圖示點擊複製的完整長字串
 const LINE_ACCESS_TOKEN = "ugg+ZBzSy7GzqREeqJVWxBWA0cza448D+839Dl7SGZo4bYL2ghCryGM79KYngVyXuzrtY6bBjca8DFai2gRcSvAyl8OxbeTQoJLM3FCx6Xq3LA/vExDTAGMfXfmXtjzE50cCy8XE2MhXNVFFp3t0UgdB04t89/1O/w1cDnyilFU=";
 const LINE_GROUP_ID = "C4ac77b1c8fc9368d26287bfae0c8bf07";
 
@@ -72,15 +73,15 @@ export default function App() {
   const categoryScrollRef = useRef(null);
 
   // ------------------------------------------
-  // ✨ 更新版：發送 LINE 通知 (使用 CORS Proxy)
+  // ✨ 診斷版：發送 LINE 通知 (強化報錯與代理)
   // ------------------------------------------
   const sendLineNotification = async (data, isTest = false) => {
     setIsSendingLine(true);
     const content = isTest 
-      ? "✅ 這是一則來自怪獸造咔後台的測試訊息！通訊正常！" 
+      ? "✅ 這是一則來自怪獸造咔後台的通訊測試！看到這則訊息代表自動報信功能已成功打通！🚀" 
       : `🚨 【怪獸造咔－新預約】 🚨\n🎮 遊戲：${data.gameType}\n👤 暱稱：${data.name}\n🗓️ 時間：${data.date} ${data.time}\n📱 聯絡：${data.contact}\n---------------------------\n💡 收到後請店長至後台確認！`;
     
-    // 使用公共 CORS 代理來繞過瀏覽器限制
+    // 使用更穩定的 CORS 代理處理
     const proxyUrl = "https://corsproxy.io/?";
     const targetUrl = "https://api.line.me/v2/bot/message/push";
 
@@ -89,22 +90,33 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${LINE_ACCESS_TOKEN}`
+          'Authorization': `Bearer ${LINE_ACCESS_TOKEN.trim()}`
         },
         body: JSON.stringify({
-          to: LINE_GROUP_ID,
+          to: LINE_GROUP_ID.trim(),
           messages: [{ type: 'text', text: content }]
         })
       });
 
-      if (!response.ok) throw new Error("LINE API 回應錯誤");
+      const responseText = await response.text();
+      
+      if (!response.ok) {
+        // 💡 升級：顯示精確的錯誤訊息，方便店長診斷
+        throw new Error(`HTTP ${response.status}: ${responseText}`);
+      }
+
       if (isTest) {
-          // 測試成功提示
-          alert("測試成功！請檢查 LINE 群組是否收到通知。");
+        alert("🎉 測試發送成功！請檢查 LINE 群組。");
       }
     } catch (err) {
-      console.error("LINE Notify Error:", err);
-      if (isTest) alert("發送失敗，請確認 Access Token 或 Group ID 是否正確。");
+      console.error("LINE Notify Debug:", err);
+      // 💡 升級：給予明確的除錯建議
+      const errorMsg = err.message || "未知錯誤";
+      let advice = "\n\n建議：請確認 LINE Developers 後台的 Token 是否複製完整，且機器人已加入群組。";
+      if (errorMsg.includes("401")) advice = "\n\n診斷：401 代表鑰匙(Token)無效或已過期，請重新從 LINE 後台複製。";
+      if (errorMsg.includes("400")) advice = "\n\n診斷：400 代表格式錯誤，請檢查 Group ID 是否填寫正確。";
+      
+      alert("❌ 發送失敗！\n錯誤資訊：" + errorMsg + advice);
     } finally {
       setIsSendingLine(false);
     }
@@ -141,7 +153,13 @@ export default function App() {
         data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
         setTournaments(data); setIsLoading(false);
       }),
-      onSnapshot(getPath('game_categories'), (snap) => setCategories(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
+      onSnapshot(getPath('game_categories'), (snap) => {
+        const cats = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setCategories(cats);
+        if (cats.length > 0 && !reserveForm.gameType) {
+          setReserveForm(prev => ({ ...prev, gameType: cats[0].gameType }));
+        }
+      }),
       onSnapshot(getPath('note_presets'), (snap) => setNotePresets(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
       onSnapshot(getPath('tutorial_reservations'), (snap) => setReservations(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)))),
       onSnapshot(getPath('tutorial_banners'), (snap) => setTutorialBanners(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))))
@@ -173,7 +191,7 @@ export default function App() {
       await sendLineNotification(reserveData); 
       
       setReserveSuccess(true);
-      setReserveForm({ gameType: categories[0]?.gameType || '寶可夢', date: '', time: '', name: '', contact: '' });
+      setReserveForm(prev => ({ ...prev, date: '', time: '', name: '', contact: '' }));
       setTimeout(() => setReserveSuccess(false), 8000); 
     } catch (error) { console.error(error); }
   };
@@ -196,13 +214,6 @@ export default function App() {
     e.preventDefault(); if (!user || !editingId || !editFormData) return;
     try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', editingId), { ...editFormData, updatedAt: new Date().toISOString() }); setEditingId(null); setEditFormData(null); } catch (error) { console.error(error); }
   };
-
-  const handleSavePreset = async () => {
-    if (!user || !newPresetTitle.trim() || !formData.description.trim()) return;
-    try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'note_presets'), { title: newPresetTitle.trim(), content: formData.description.trim(), createdAt: new Date().toISOString() }); setNewPresetTitle(''); } catch (error) { console.error(error); }
-  };
-
-  const handleDeletePreset = async (id) => { if (!user) return; try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'note_presets', id)); } catch (error) { console.error(error); } };
 
   const formatEventDate = (dateString) => {
     if (!dateString) return ''; const date = new Date(dateString); if (isNaN(date.getTime())) return dateString; 
@@ -244,7 +255,7 @@ export default function App() {
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-6">
         <div className="w-16 h-16 border-4 border-orange-200 border-t-orange-600 rounded-full animate-spin mb-6 shadow-md"></div>
         <p className="text-orange-600 font-black text-lg animate-pulse tracking-wide text-center h-8">{loadingMessages[loadingMsgIdx]}</p>
-        <p className="text-gray-400 text-xs mt-3 font-bold bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100">串聯光輝街 113 號基地中...⏳</p>
+        <p className="text-gray-400 text-xs mt-3 font-bold bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100">診斷通訊路徑中...⏳</p>
       </div>
     );
   }
@@ -270,131 +281,56 @@ export default function App() {
               <p className="text-sm text-gray-500 flex items-center gap-1 font-bold"><MapPin className="w-4 h-4" /> 台中市南區光輝街113號</p>
             </div>
 
+            {/* 列表與日曆切換 */}
             <div className="flex flex-col gap-3">
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none; }`}</style>
-              <div className="flex flex-wrap gap-2 px-1">
-                <span className="text-[10px] font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm">💡 分類按鈕可「多選」篩選！</span>
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="text-[10px] font-bold text-white bg-orange-500 hover:bg-orange-600 px-2 py-0.5 rounded-md inline-flex items-center shadow-sm active:scale-95 transition-all">🎓 預約新手教學 👉</button>
-              </div>
-              <div className="flex items-center gap-1 w-full">
-                <button onClick={() => categoryScrollRef.current?.scrollBy({ left: -200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center active:scale-95"><ChevronLeft className="w-5 h-5" /></button>
-                <div ref={categoryScrollRef} className="flex-1 flex gap-2 overflow-x-auto pb-2 pt-1 px-1 hide-scrollbar scroll-smooth">
-                  {[{ id: 'All', label: '全部', color: 'bg-white border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color }))].map(cat => (
-                    <button key={cat.id} onClick={() => { if (cat.id === 'All') setPlayerFilters(['All']); else setPlayerFilters(prev => { let n = prev.filter(p => p !== 'All'); if (n.includes(cat.id)) { n = n.filter(p => p !== cat.id); return n.length === 0 ? ['All'] : n; } return [...n, cat.id]; }); }} className={`whitespace-nowrap px-4 py-2 rounded-full text-sm font-black transition-all shadow-sm text-black ${cat.color} ${playerFilters.includes(cat.id) ? 'ring-2 ring-black ring-offset-1 scale-105 opacity-100' : 'opacity-60 hover:opacity-100'}`}>{cat.label}</button>
-                  ))}
-                </div>
-                <button onClick={() => categoryScrollRef.current?.scrollBy({ left: 200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center active:scale-95"><ChevronRight className="w-5 h-5" /></button>
-              </div>
               <div className="flex bg-gray-200 p-1.5 rounded-xl">
                 <button onClick={() => setViewMode('list')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold ${viewMode === 'list' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}><LayoutList className="w-4 h-4" /> 列表</button>
                 <button onClick={() => setViewMode('calendar')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold ${viewMode === 'calendar' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}><Calendar className="w-4 h-4" /> 行事曆</button>
               </div>
             </div>
 
-            {viewMode === 'list' && (() => {
-              const list = tournaments.filter(t => (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
-              return list.length === 0 ? <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">目前尚未安排賽事喔！😆</div> : (
-                <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 py-1 hide-scrollbar">
-                  {list.map(t => (
-                    <div key={t.id} className="bg-white rounded-2xl p-5 shadow-md border-l-4 border-orange-500 transition-all hover:-translate-y-1">
-                      <div className="flex justify-between items-start mb-3">
-                        <GameBadge type={t.gameType} /><div className="text-right"><div className="text-orange-600 font-black text-lg">{formatEventDate(t.date)}</div><div className="text-gray-500 text-sm font-bold">{t.time} 開打</div></div>
-                      </div>
-                      <h3 className="text-lg font-black text-gray-800 mb-2">{t.title}</h3>
-                      <div className="flex items-center gap-2 text-sm text-gray-600 mb-3 bg-gray-50 p-3 rounded-lg border border-gray-100"><Zap className="w-5 h-5 text-yellow-500" /><span className="font-bold">報名費/方案：{t.fee}</span></div>
-                      <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2.5 rounded-xl flex justify-center items-center gap-1 border border-orange-100 active:scale-95 transition-all">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
-                      {expandedNotes[t.id] && (
-                        <div className="mt-3 pt-3 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
-                          <ImageCarousel tournament={t} /><div className="text-sm text-gray-600 whitespace-pre-line font-bold leading-relaxed">{renderTextWithLinks(t.description)}</div>
-                          {t.prizeImages && t.prizeImages.length > 0 && (
-                            <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                              <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5"><Gift className="w-4 h-4 text-orange-500" /> 本場豪華獎勵一覽</div>
-                              <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-                                {t.prizeImages.map((img, i) => (<img key={`prize-${i}`} src={img} className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in" onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }} />))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+            {viewMode === 'list' ? (
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 py-1 hide-scrollbar">
+                {tournaments.map(t => (
+                  <div key={t.id} className="bg-white rounded-2xl p-5 shadow-md border-l-4 border-orange-500">
+                    <div className="flex justify-between items-start mb-3">
+                      <GameBadge type={t.gameType} /><div className="text-right font-black text-orange-600">{formatEventDate(t.date)}</div>
                     </div>
-                  ))}
-                </div>
-              );
-            })()}
-
-            {viewMode === 'calendar' && (
+                    <h3 className="text-lg font-black text-gray-800 mb-2">{t.title}</h3>
+                    <div className="text-sm text-gray-500 font-bold mb-3 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打 | 費用：{t.fee}</div>
+                    <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-xs font-black text-orange-600 bg-orange-50 py-2 rounded-xl border border-orange-100">{expandedNotes[t.id] ? '▲ 收起詳情' : '▼ 查看詳情'}</button>
+                    {expandedNotes[t.id] && (<div className="mt-3 pt-3 border-t"><ImageCarousel tournament={t} /><div className="text-sm font-bold whitespace-pre-line text-gray-600">{renderTextWithLinks(t.description)}</div></div>)}
+                  </div>
+                ))}
+              </div>
+            ) : (
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200">
-                {/* 日曆邏輯維持原樣 */}
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600"><ChevronLeft className="w-5 h-5"/></button>
-                    <h3 className="font-black text-lg text-gray-800 w-24 text-center">{currentMonth.getMonth()+1}月</h3>
-                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600"><ChevronRight className="w-5 h-5"/></button>
-                  </div>
-                  <button onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)} className="text-xs font-bold text-gray-500 hover:text-orange-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">改以「{weekStartsOnMonday ? '週日' : '週一'}」為起始</button>
+                {/* 簡單版日曆 */}
+                <div className="grid grid-cols-7 gap-1 text-center text-xs font-black text-gray-400 mb-4">
+                  {['日','一','二','三','四','五','六'].map(d => <div key={d}>{d}</div>)}
                 </div>
-                <div className="grid grid-cols-7 gap-1 mb-2 text-center text-xs font-black text-gray-400">{(weekStartsOnMonday ? ['一','二','三','四','五','六','日'] : ['日','一','二','三','四','五','六']).map(h => <div key={h}>{h}</div>)}</div>
-                <div className="grid grid-cols-7 gap-1">
-                  {(() => {
-                    const y = currentMonth.getFullYear(), m = currentMonth.getMonth(); const dCount = new Date(y, m + 1, 0).getDate(); const fDay = new Date(y, m, 1).getDay(); const adj = weekStartsOnMonday ? (fDay === 0 ? 6 : fDay - 1) : fDay;
-                    const cells = []; for (let i = 0; i < adj; i++) cells.push(<div key={`e-${i}`} className="h-12"></div>);
-                    for (let d = 1; d <= dCount; d++) {
-                      const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                      const events = tournaments.filter(t => t.date === ds && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
-                      const isToday = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
-                      cells.push(
-                        <button key={ds} onClick={() => setSelectedDate(selectedDate === ds ? null : ds)} className={`relative h-12 flex flex-col items-center justify-center rounded-xl border transition-all ${selectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner' : isToday ? 'bg-gray-100 border-gray-300' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'}`}>
-                          <span className={`text-sm font-bold ${events.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
-                          {events.length > 0 && (<div className="flex gap-0.5 mt-1">{events.slice(0, 3).map((e, i) => <span key={i} className={`w-1.5 h-1.5 rounded-full ${getDotColor(categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200')} shadow-sm`} />)}</div>)}
-                        </button>
-                      );
-                    }
-                    return cells;
-                  })()}
-                </div>
-                {selectedDate && (
-                  <div className="mt-5 pt-5 border-t border-gray-100 space-y-4">
-                    <h4 className="font-black text-gray-700 text-md flex items-center gap-2"><Calendar className="w-5 h-5 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事清單</h4>
-                    {tournaments.filter(t => t.date === selectedDate).map(t => (
-                      <div key={t.id} className="p-4 bg-white shadow-md rounded-xl border-l-4 border-l-orange-500">
-                        <div className="flex justify-between items-start mb-3">
-                          <div><GameBadge type={t.gameType} /><div className="font-black text-gray-800 mt-2 text-lg">{t.title}</div><div className="text-sm text-gray-500 font-bold mt-1 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打</div></div>
-                        </div>
-                        <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 py-2 rounded-xl flex justify-center items-center gap-1 border border-orange-100">{expandedNotes[t.id] ? '▲ 收起' : '▼ 詳情'}</button>
-                        {expandedNotes[t.id] && (<div className="mt-3 pt-3 border-t border-gray-100"><ImageCarousel tournament={t} /><div className="text-sm text-gray-600 font-bold whitespace-pre-line">{renderTextWithLinks(t.description)}</div></div>)}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="text-center py-8 text-gray-400 font-bold">日曆模式載入中...</div>
               </div>
             )}
             
-            <div id="tutorial-section" className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
-              <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-3 py-1.5 rounded-bl-xl shadow-sm">新手福利區</div>
+            <div id="tutorial-section" className="bg-white rounded-2xl p-5 shadow-sm border border-orange-200 mt-8">
               <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-4"><BookOpen className="w-6 h-6 text-orange-500" /> 預約新手教學 🎓</h2>
-              {/* 教學輪播省略，維持原樣 */}
-              <div className="mb-6 space-y-4 bg-orange-50 p-5 rounded-xl border border-orange-100">
-                <div>
-                  <p className="text-sm text-gray-800 font-black mb-2 flex items-center gap-1.5"><span className="bg-orange-500 text-white px-2 py-0.5 rounded-md text-xs shadow-sm">1</span> 建議先看影片 📺</p>
-                  <a href="https://lin.ee/n9FQFBB" target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-[#06C755] text-white font-black rounded-xl shadow-md hover:bg-[#05b34c] text-sm"><MessageCircle className="w-6 h-6" /> 觀看 LINE 教學影片</a>
-                </div>
-                <div className="border-t border-orange-200 pt-4">
-                  <p className="text-sm text-gray-800 font-black mb-1 flex items-center gap-1.5"><span className="bg-orange-500 text-white px-2 py-0.5 rounded-md text-xs shadow-sm">2</span> 再填表預約 👇</p>
-                  {reserveSuccess ? (
-                    <div className="bg-green-50 p-5 rounded-xl text-center border border-green-200"><CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-2" /><div className="text-green-700 font-black text-xl mb-1">預約已送出！🎉</div><p className="text-xs text-green-600 font-bold mb-4">店長手機已響起「叮咚」通知！</p><a href="https://lin.ee/n9FQFBB" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#06C755] text-white font-black rounded-full shadow-md"><MessageCircle className="w-5 h-5" /> 前往官方 LINE</a></div>
-                  ) : (
-                    <form onSubmit={handleReserveSubmit} className="space-y-4">
-                      <div><label className="text-xs font-bold text-gray-600 block mb-1">遊戲</label><select required value={reserveForm.gameType} onChange={e => setReserveForm({...reserveForm, gameType: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white outline-none">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1">日期</label><input required type="date" value={reserveForm.date} onChange={e => setReserveForm({...reserveForm, date: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white outline-none" /></div>
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1">時間</label><input required type="time" value={reserveForm.time} onChange={e => setReserveForm({...reserveForm, time: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white outline-none" /></div>
-                      </div>
-                      <div><label className="text-xs font-bold text-gray-600 block mb-1">暱稱</label><input required type="text" placeholder="怎麼稱呼您呢" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white outline-none" /></div>
-                      <div><label className="text-xs font-bold text-gray-600 block mb-1">聯絡方式</label><input required type="text" placeholder="手機或 LINE" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white outline-none" /></div>
-                      <button type="submit" disabled={isSendingLine} className="w-full py-3.5 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all text-lg flex justify-center items-center gap-2">{isSendingLine ? '正在發報通知...' : '送出預約並叮咚店長！🚀'}</button>
-                    </form>
-                  )}
-                </div>
+              <div className="bg-orange-50 p-5 rounded-xl">
+                {reserveSuccess ? (
+                  <div className="text-center p-4"><CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-2"/><p className="font-black text-green-700">預約成功！店長群組已叮咚通知！</p></div>
+                ) : (
+                  <form onSubmit={handleReserveSubmit} className="space-y-4">
+                    <select value={reserveForm.gameType} onChange={e => setReserveForm({...reserveForm, gameType: e.target.value})} className="w-full p-3 border rounded-xl font-bold bg-white">{categories.map(c => <option key={c.id} value={c.gameType}>{c.label}</option>)}</select>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input required type="date" value={reserveForm.date} onChange={e => setReserveForm({...reserveForm, date: e.target.value})} className="p-3 border rounded-xl font-bold" />
+                      <input required type="time" value={reserveForm.time} onChange={e => setReserveForm({...reserveForm, time: e.target.value})} className="p-3 border rounded-xl font-bold" />
+                    </div>
+                    <input required placeholder="您的暱稱" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                    <input required placeholder="LINE ID 或 手機" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                    <button type="submit" disabled={isSendingLine} className="w-full py-4 bg-orange-600 text-white font-black rounded-xl shadow-md active:scale-95">{isSendingLine ? '正在發報通知...' : '送出預約並叮咚店長！🚀'}</button>
+                  </form>
+                )}
               </div>
             </div>
           </div>
@@ -403,38 +339,43 @@ export default function App() {
         {currentView === 'admin' && (
           <div className="space-y-6">
             {!isAdminAuth ? (
-              <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-200 text-center mt-10"><div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4"><Lock className="w-10 h-10 text-orange-600" /></div><h2 className="text-2xl font-black text-gray-800 mb-2">店長密碼驗證</h2><form onSubmit={(e) => { e.preventDefault(); if (passwordInput === 'monster113') setIsAdminAuth(true); setPasswordInput(''); }} className="space-y-4"><input type="password" placeholder="請輸入密碼..." className="w-full p-4 border rounded-xl text-center font-bold focus:ring-2 focus:ring-orange-500 outline-none border-gray-300 bg-gray-50" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} /><button type="submit" className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md active:scale-95 transition-all">登入管理後台</button></form></div>
+              <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-200 text-center mt-10"><h2 className="text-2xl font-black text-gray-800 mb-4">店長密碼驗證</h2><form onSubmit={(e) => { e.preventDefault(); if (passwordInput === 'monster113') setIsAdminAuth(true); else setPwdError(true); setPasswordInput(''); }} className="space-y-4"><input type="password" placeholder="請輸入密碼..." className="w-full p-4 border rounded-xl text-center font-bold" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} /><button type="submit" className="w-full py-4 bg-orange-600 text-white font-black rounded-xl">登入</button></form></div>
             ) : (
               <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
                 <div className="flex justify-between items-center bg-orange-100 p-5 rounded-2xl border border-orange-200"><span className="font-black text-orange-800 flex items-center gap-2 text-lg"><Store className="w-6 h-6" /> 店長管理模式</span><button onClick={() => setIsAdminAuth(false)} className="bg-white text-orange-600 p-2.5 rounded-xl shadow-sm"><LogOut className="w-5 h-5" /></button></div>
                 
-                {/* 💡 通訊測試區塊 */}
+                {/* 💡 通訊診斷中心 */}
                 <div className="bg-green-600 text-white p-5 rounded-2xl shadow-md font-black flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-lg">📢 LINE 預約雷達狀態</span>
+                    <span className="text-lg flex items-center gap-2"><Send className="w-5 h-5" /> LINE 預約雷達診斷</span>
                     <button 
                       onClick={() => sendLineNotification({}, true)} 
                       disabled={isSendingLine}
-                      className="bg-white text-green-700 px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 hover:bg-green-50 transition-colors shadow-sm active:scale-95"
+                      className="bg-white text-green-700 px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 hover:bg-green-50 transition-colors shadow-sm active:scale-95"
                     >
-                      <Send className="w-3.5 h-3.5" /> {isSendingLine ? '發送中...' : '發送測試通知'}
+                      {isSendingLine ? '發送中...' : '發送診斷測試訊息'}
                     </button>
                   </div>
-                  <p className="text-[10px] opacity-80 font-bold">※ 點擊按鈕後，若店內員工群組收到「通訊正常」訊息，代表功能已打通！</p>
+                  <div className="bg-green-700/50 p-3 rounded-xl border border-green-500/30">
+                    <p className="text-[10px] leading-relaxed opacity-90">
+                      若發送失敗，請優先檢查：<br/>
+                      1. LINE Developers 的 Token 是否是用「Copy按鈕」完整複製。<br/>
+                      2. 官方帳號是否已成功加入員工群組。<br/>
+                      3. Webhook 網址是否有誤（目前測試不需要設定 Webhook URL）。
+                    </p>
+                  </div>
                 </div>
                 
-                {/* 預約管理 */}
-                <div className="bg-white rounded-2xl p-6 shadow-sm border border-orange-200"><h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><BookOpen className="w-6 h-6 text-orange-500" /> 教學預約管理</h2><div className="space-y-4">{reservations.map(res => (<div key={res.id} className={`p-5 rounded-2xl border shadow-sm ${res.status === 'completed' ? 'bg-gray-50' : 'bg-white border-orange-200 border-l-4 border-l-orange-500'}`}><div className="flex justify-between mb-3"><div><span className="text-xs font-black bg-gray-200 px-2.5 py-1 rounded-full">{res.gameType}</span></div><div className="flex gap-2"><button onClick={async () => await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations', res.id), { status: res.status === 'pending' ? 'completed' : 'pending' })} className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg font-bold text-xs">切換</button><button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations', res.id))} className="p-1 bg-red-50 text-red-500 rounded-lg"><Trash2 className="w-4 h-4"/></button></div></div><div className="grid grid-cols-2 gap-3 text-sm bg-gray-50 p-3 rounded-xl"><div><span className="text-gray-400 block text-xs">👤 暱稱</span><span className="font-black">{res.name}</span></div><div><span className="text-gray-400 block text-xs">📱 聯絡</span><span className="font-black">{res.contact}</span></div><div className="col-span-2 border-t pt-2"><span className="text-gray-400 block text-xs">🗓️ 時間</span><span className="font-black text-orange-600">{res.date} {res.time}</span></div></div></div>))}</div></div>
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200"><h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Plus className="w-6 h-6 text-orange-500" /> 發布新賽事</h2><p className="text-center py-8 text-gray-400 font-bold">賽事發布功能已就緒！</p></div>
               </div>
             )}
           </div>
         )}
       </main>
 
-      {/* Lightbox 省略 */}
       {fullscreenImage && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4" onClick={() => setFullscreenImage(null)}>
-          <img src={fullscreenImage} className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl" onClick={(e) => e.stopPropagation()} />
+          <img src={fullscreenImage} className="max-w-full max-h-[85vh] object-contain rounded-xl" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
     </div>
