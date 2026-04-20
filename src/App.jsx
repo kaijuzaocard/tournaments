@@ -79,9 +79,17 @@ export default function App() {
 
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [isSendingLine, setIsSendingLine] = useState(false);
+  
+  // 💡 特助優化：加入優雅的提示框狀態，取代原生的 alert
+  const [toastMsg, setToastMsg] = useState('');
 
   const categoryScrollRef = useRef(null);
   const hasRandomizedBanner = useRef(false);
+
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 4000);
+  };
 
   const sendLineNotification = async (data, isTest = false) => {
     setIsSendingLine(true);
@@ -101,10 +109,10 @@ export default function App() {
         body: JSON.stringify(payloadData)
       });
       
-      if (isTest) alert("🎉 GAS 轉發測試成功！請檢查您的 Google 試算表與 LINE 群組。");
+      if (isTest) showToast("🎉 GAS 轉發測試成功！請檢查您的 Google 試算表與 LINE 群組。");
     } catch (err) {
       console.error("GAS 轉發失敗:", err);
-      if (isTest) alert("❌ 發送失敗，請檢查網路狀況。");
+      if (isTest) showToast("❌ 發送失敗，請檢查網路狀況。");
     } finally {
       setIsSendingLine(false);
     }
@@ -256,6 +264,7 @@ export default function App() {
       await Promise.all(promises);
       setFormData({ ...formData, title: '', description: '', images: [], prizeImages: [] });
       setSchedules([{ date: '', time: '19:00' }]);
+      showToast('✅ 賽事已成功發布！');
     } catch (err) { console.error(err); }
   };
 
@@ -269,6 +278,7 @@ export default function App() {
       });
       setEditingId(null);
       setEditFormData(null);
+      showToast('✅ 賽事內容已更新！');
     } catch (error) {
       console.error("Error updating document: ", error);
     }
@@ -283,6 +293,7 @@ export default function App() {
       });
       setNewTutorialBanner({ title: '', url: '' });
       if (document.getElementById('tutorial-banner-file')) document.getElementById('tutorial-banner-file').value = '';
+      showToast('✅ 教學福利圖已新增！');
     } catch (error) { console.error(error); }
   };
 
@@ -312,6 +323,7 @@ export default function App() {
         gameType: newCategoryName.trim(), label: newCategoryName.trim(), color: newCategoryColor, createdAt: new Date().toISOString() 
       });
       setNewCategoryName('');
+      showToast('✅ 新遊戲分類已加入！');
     } catch (error) { console.error(error); }
   };
 
@@ -322,12 +334,16 @@ export default function App() {
         title: newPresetTitle.trim(), content: formData.description.trim(), createdAt: new Date().toISOString()
       });
       setNewPresetTitle('');
+      showToast('✅ 備註模板已儲存！');
     } catch (error) { console.error("Error saving preset: ", error); }
   };
 
   const handleDeletePreset = async (id) => {
     if (!user) return;
-    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'note_presets', id)); } 
+    try { 
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'note_presets', id)); 
+      showToast('🗑️ 備註模板已刪除！');
+    } 
     catch (error) { console.error("Error deleting preset: ", error); }
   };
 
@@ -723,7 +739,7 @@ export default function App() {
                       <form onSubmit={handleAddTournament} className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                           <div><label className="text-sm font-bold text-gray-600 block mb-2">遊戲種類</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.gameType} onChange={e => setFormData({...formData, gameType: e.target.value})}>{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
-                          <div><label className="text-sm font-bold text-gray-600 block mb-2">賽事名稱</label><input required type="text" placeholder="例如：寶可夢奪包賽" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} /></div>
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">賽事名稱</label><input required type="text" placeholder="例如：奪包賽" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} /></div>
                         </div>
                         
                         <div className="bg-orange-50 p-5 rounded-2xl border border-orange-100 shadow-inner">
@@ -900,8 +916,8 @@ export default function App() {
                                 const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
                                 const blockBg = getDotColor(catColor);
                                 return (
-                                  <div key={i} className={`text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-white font-bold text-left ${blockBg}`} title={e.title}>
-                                    {e.title}
+                                  <div key={i} className={`text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-white font-bold text-left mb-1 ${blockBg}`} title={`${e.gameType}-${e.title}`}>
+                                    {e.gameType}-{e.title}
                                   </div>
                                 )
                               })}
@@ -1061,7 +1077,7 @@ export default function App() {
       {/* 🔍 全域放大圖片懸浮視窗 */}
       {fullscreenImage && (
         <div 
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200"
           onClick={() => setFullscreenImage(null)}
         >
           <div className="relative max-w-full max-h-full flex flex-col items-center">
@@ -1081,6 +1097,15 @@ export default function App() {
                 setFullscreenImage(null);
               }} 
             />
+          </div>
+        </div>
+      )}
+      
+      {/* 💡 全域 Toast 提示 */}
+      {toastMsg && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] animate-in slide-in-from-bottom-4 fade-in duration-300">
+          <div className="bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl font-bold flex items-center gap-2 border border-gray-700">
+            {toastMsg}
           </div>
         </div>
       )}
