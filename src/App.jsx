@@ -621,7 +621,7 @@ export default function App() {
                     <div className="bg-green-50 p-5 rounded-xl text-center border border-green-200 shadow-inner animate-pulse">
                       <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-2" />
                       <div className="text-green-700 font-black text-xl mb-1">預約已送出！🎉</div>
-                      <div className="text-green-600 text-sm font-bold mb-4">我們會盡快為您安排。</div>
+                      <div className="text-green-600 text-sm font-bold mb-4">我們會盡快為您安排。<br/>如需再次預約，請稍候片刻...</div>
                       <a href="https://lin.ee/n9FQFBB" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#06C755] text-white font-black rounded-full shadow-md hover:bg-[#05b34c] hover:scale-105 transition-all"><MessageCircle className="w-5 h-5" /> 前往官方 LINE 聯繫</a>
                     </div>
                   ) : (
@@ -633,7 +633,7 @@ export default function App() {
                       </div>
                       <div><label className="text-xs font-bold text-gray-600 block mb-1 flex items-center gap-1"><User className="w-4 h-4"/> 您的暱稱</label><input required type="text" placeholder="怎麼稱呼您呢" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
                       <div><label className="text-xs font-bold text-gray-600 block mb-1 flex items-center gap-1"><Phone className="w-4 h-4"/> 聯絡方式</label><input required type="text" placeholder="LINE ID 或 手機號碼" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-                      <button type="submit" disabled={isSendingLine} className="w-full py-3.5 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all mt-2 text-lg flex items-center justify-center gap-2">{isSendingLine ? '發報通知...' : '送出預約！🚀'}</button>
+                      <button type="submit" disabled={isSendingLine} className="w-full py-3.5 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all mt-2 text-lg flex items-center justify-center gap-2">{isSendingLine ? '⏳ 傳送中，請稍候...' : '送出預約！🚀'}</button>
                     </form>
                   )}
                 </div>
