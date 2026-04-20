@@ -417,6 +417,9 @@ export default function App() {
       </nav>
 
       <main className="max-w-md mx-auto p-4 space-y-6 mt-4">
+        {/* ========================================== */}
+        {/* 玩家看版 (Player View) */}
+        {/* ========================================== */}
         {currentView === 'player' && (
           <div className="space-y-5 animate-in fade-in duration-500">
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200">
@@ -448,6 +451,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* 玩家版：列表模式 */}
             {viewMode === 'list' && (() => {
               const now = new Date(); const next = new Date(now); next.setDate(now.getDate() + 14);
               const list = tournaments.filter(t => { const d = new Date(`${t.date}T${t.time}`); return d >= now && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); });
@@ -498,6 +502,7 @@ export default function App() {
               );
             })()}
 
+            {/* 玩家版：圓點點行事曆 (適合手機單手滑動) */}
             {viewMode === 'calendar' && (
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-4">
@@ -643,6 +648,9 @@ export default function App() {
           </div>
         )}
 
+        {/* ========================================== */}
+        {/* 店家後台 (Admin View) */}
+        {/* ========================================== */}
         {currentView === 'admin' && (
           <div className="space-y-6">
             {!isAdminAuth ? (
@@ -821,7 +829,9 @@ export default function App() {
                   </form>
                 </div>
                 
-                {/* 賽事管理月曆與編輯清單 */}
+                {/* ========================================== */}
+                {/* 💡 後台專用：滿版色塊大行事曆 (TimeTree 風格) */}
+                {/* ========================================== */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                   <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Calendar className="w-6 h-6 text-orange-500" /> 賽事管理與編輯</h2>
                   <div className="flex justify-between items-center mb-5 bg-gray-50 p-3 rounded-2xl border border-gray-100">
@@ -829,34 +839,41 @@ export default function App() {
                     <button onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)} className="text-xs font-bold text-gray-500 hover:text-orange-600 border border-gray-200 bg-white px-3 py-1.5 rounded-lg shadow-sm transition-colors">改以「{weekStartsOnMonday ? '週日' : '週一'}」為起始</button>
                   </div>
                   
-                  {/* 星期標題 */}
-                  <div className="grid grid-cols-7 gap-1 mb-2 text-center text-xs font-black text-gray-400">
+                  <div className="grid grid-cols-7 gap-1 md:gap-2 mb-2 text-center text-xs font-black text-gray-400">
                     {weekHeaders.map(h => <div key={h}>{h}</div>)}
                   </div>
                   
-                  <div className="grid grid-cols-7 gap-1">
+                  <div className="grid grid-cols-7 gap-1 md:gap-2">
                     {(() => {
                       const year = adminMonth.getFullYear(), month = adminMonth.getMonth();
                       const days = new Date(year, month + 1, 0).getDate();
                       const firstDay = new Date(year, month, 1).getDay();
                       const adj = weekStartsOnMonday ? (firstDay === 0 ? 6 : firstDay - 1) : firstDay;
                       const cells = [];
-                      for (let i = 0; i < adj; i++) cells.push(<div key={`e-${i}`} className="h-12"></div>);
+                      for (let i = 0; i < adj; i++) cells.push(<div key={`e-${i}`} className="h-12 md:min-h-[110px]"></div>);
                       for (let d = 1; d <= days; d++) {
                         const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const evs = tournaments.filter(t => t.date === ds);
+                        const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
                         cells.push(
-                          <button key={ds} onClick={() => setAdminSelectedDate(adminSelectedDate === ds ? null : ds)} className={`relative h-12 flex flex-col items-center justify-center rounded-xl border transition-all ${adminSelectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'}`}>
-                            <span className={`text-sm font-bold ${evs.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
-                            {evs.length > 0 && (
-                              <div className="flex gap-0.5 mt-1">
-                                {evs.slice(0,3).map((e, i) => {
-                                  const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
-                                  return <span key={i} className={`w-1.5 h-1.5 rounded-full ${getDotColor(catColor)} shadow-sm`}></span>
-                                })}
-                              </div>
-                            )}
-                          </button>
+                          <div 
+                            key={ds} 
+                            onClick={() => setAdminSelectedDate(adminSelectedDate === ds ? null : ds)} 
+                            className={`relative min-h-[90px] md:min-h-[110px] flex flex-col items-center justify-start rounded-xl border p-1 transition-all cursor-pointer ${adminSelectedDate === ds ? 'bg-orange-50 border-orange-500 shadow-inner ring-1 ring-orange-500' : isToday ? 'bg-gray-50 border-gray-300' : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}
+                          >
+                            <span className={`text-xs font-bold mb-1 ${isToday ? 'bg-orange-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow-sm' : (evs.length > 0 ? 'text-gray-800' : 'text-gray-400')}`}>{d}</span>
+                            <div className="flex flex-col gap-1 w-full flex-1 overflow-y-auto hide-scrollbar">
+                              {evs.map((e, i) => {
+                                const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
+                                const blockBg = getDotColor(catColor);
+                                return (
+                                  <div key={i} className={`text-[10px] md:text-xs truncate w-full px-1.5 py-0.5 rounded shadow-sm text-white font-bold text-left ${blockBg}`}>
+                                    {e.title}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
                         );
                       }
                       return cells;
