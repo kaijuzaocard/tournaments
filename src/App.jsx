@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send } from 'lucide-react';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee } from 'lucide-react';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -24,9 +24,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 確保路徑中不包含會破壞 Firestore 結構的特殊字元
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
-const appId = String(rawAppId).replace(/\//g, '-');
+// 取得系統分配的 appId，做為資料庫唯一識別徑
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -62,6 +61,8 @@ export default function App() {
   const [notePresets, setNotePresets] = useState([]);
   const [newPresetTitle, setNewPresetTitle] = useState('');
   const [reservations, setReservations] = useState([]);
+  const [closures, setClosures] = useState([]); // 新增：店休狀態
+  const [closureReason, setClosureReason] = useState(''); // 新增：店休原因表單
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
 
@@ -190,6 +191,8 @@ export default function App() {
     setupListener(getCollection('tutorial_banners'), setTutorialBanners, (data) =>
       data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     );
+
+    setupListener(getCollection('store_closures'), setClosures); // 新增：監聽店休資料
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
@@ -347,6 +350,28 @@ export default function App() {
     catch (error) { console.error("Error deleting preset: ", error); }
   };
 
+  // 新增：處理店休設定與解除
+  const handleToggleClosure = async (dateStr, existingClosure) => {
+    if (!user) return;
+    try {
+      if (existingClosure) {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'store_closures', existingClosure.id));
+        showToast('✅ 已解除店休！');
+      } else {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
+          date: dateStr,
+          reason: closureReason || '店休',
+          createdAt: new Date().toISOString()
+        });
+        showToast('⛔ 已設定為店休！');
+        setClosureReason(''); // 儲存後清空
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('❌ 設定店休失敗');
+    }
+  };
+
   const formatEventDate = (dateString) => {
     if (!dateString) return '';
     if (typeof dateString !== 'string') return String(dateString);
@@ -476,9 +501,20 @@ export default function App() {
             {viewMode === 'list' && (() => {
               const now = new Date(); const next = new Date(now); next.setDate(now.getDate() + 14);
               const list = tournaments.filter(t => { const d = new Date(`${t.date}T${t.time}`); return d >= now && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); });
-              return list.length === 0 ? <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div> : (
+              const upcomingClosures = closures.filter(c => { const d = new Date(`${c.date}T00:00:00`); return d >= now && d <= next; });
+              const combinedList = [...list, ...upcomingClosures.map(c => ({...c, isClosure: true}))].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+              return combinedList.length === 0 ? <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div> : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 max-h-[75vh] overflow-y-auto px-2 py-2 hide-scrollbar">
-                  {list.map(t => (
+                  {combinedList.map(t => (
+                    t.isClosure ? (
+                      <div key={`closure-${t.id}`} className="bg-gray-100 rounded-2xl p-5 shadow-sm border-l-4 border-gray-400 flex flex-col h-full justify-center items-center text-center opacity-80 min-h-[220px]">
+                        <Coffee className="w-12 h-12 text-gray-500 mb-3" />
+                        <div className="text-gray-500 font-black text-lg mb-2">{formatEventDate(t.date)}</div>
+                        <h3 className="text-xl font-black text-gray-800">{t.reason}</h3>
+                        <p className="text-sm font-bold text-gray-500 mt-2">這天基地休息喔，別白跑一趟！</p>
+                      </div>
+                    ) : (
                     <div key={t.id} className="bg-white rounded-2xl p-5 shadow-md border-l-4 border-orange-500 transition-all hover:-translate-y-2 hover:shadow-lg flex flex-col h-full">
                       <div className="flex justify-between items-start mb-3">
                         <GameBadge type={t.gameType} />
@@ -520,6 +556,7 @@ export default function App() {
                         )}
                       </div>
                     </div>
+                    )
                   ))}
                 </div>
               );
@@ -553,10 +590,14 @@ export default function App() {
                       const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                       const events = tournaments.filter(t => t.date === ds && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
                       const isToday = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
+                      const closureObj = closures.find(c => c.date === ds);
+
                       cells.push(
-                        <button key={ds} onClick={() => setSelectedDate(selectedDate === ds ? null : ds)} className={`relative h-14 md:h-24 flex flex-col items-center justify-center rounded-xl border transition-all ${selectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner md:scale-105' : isToday ? 'bg-gray-100 border-gray-300' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'}`}>
-                          <span className={`text-sm md:text-lg font-bold ${events.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
-                          {events.length > 0 && (
+                        <button key={ds} onClick={() => setSelectedDate(selectedDate === ds ? null : ds)} className={`relative h-14 md:h-24 flex flex-col items-center justify-center rounded-xl border transition-all ${selectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner md:scale-105' : isToday ? 'bg-gray-100 border-gray-300' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'} ${closureObj ? 'bg-gray-100/50 opacity-70' : ''}`}>
+                          <span className={`text-sm md:text-lg font-bold ${closureObj ? 'text-gray-400 line-through' : events.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
+                          {closureObj ? (
+                            <div className="mt-1 text-[9px] md:text-xs font-black text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded truncate max-w-[90%] flex items-center gap-1"><Coffee className="w-3 h-3 hidden md:block" /> {closureObj.reason}</div>
+                          ) : events.length > 0 && (
                             <div className="flex gap-1 md:gap-1.5 mt-1">
                               {events.slice(0, 3).map((e, i) => {
                                 const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
@@ -575,7 +616,14 @@ export default function App() {
                 {selectedDate && (
                   <div className="mt-8 pt-6 border-t border-gray-100">
                     <h4 className="font-black text-gray-700 text-lg flex items-center gap-2 mb-4"><Calendar className="w-6 h-6 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事清單</h4>
-                    {tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).length === 0 ? (
+                    
+                    {closures.find(c => c.date === selectedDate) ? (
+                      <div className="bg-gray-50 p-8 rounded-2xl text-center border-2 border-gray-200 border-dashed flex flex-col items-center justify-center">
+                        <Coffee className="w-12 h-12 text-gray-400 mb-3" />
+                        <h3 className="text-xl font-black text-gray-700 mb-1">{closures.find(c => c.date === selectedDate).reason}</h3>
+                        <p className="text-sm font-bold text-gray-500">今日基地沒有營業喔，別白跑一趟！</p>
+                      </div>
+                    ) : tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).length === 0 ? (
                       <p className="text-sm text-gray-400 font-bold bg-gray-50 p-6 rounded-xl text-center border border-gray-100 border-dashed">這天沒有安排賽事喔！</p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -904,23 +952,29 @@ export default function App() {
                         const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const evs = tournaments.filter(t => t.date === ds);
                         const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+                        const closureObj = closures.find(c => c.date === ds);
+
                         cells.push(
                           <div 
                             key={ds} 
                             onClick={() => setAdminSelectedDate(adminSelectedDate === ds ? null : ds)} 
-                            className={`relative min-h-[90px] md:min-h-[140px] flex flex-col items-stretch justify-start rounded-xl border p-1 md:p-2 transition-all cursor-pointer overflow-hidden ${adminSelectedDate === ds ? 'bg-orange-50 border-orange-500 shadow-md ring-2 ring-orange-500 scale-[1.02] z-10' : isToday ? 'bg-gray-50 border-gray-300' : 'bg-white border-gray-200 hover:border-orange-300 hover:shadow-sm'}`}
+                            className={`relative min-h-[90px] md:min-h-[140px] flex flex-col items-stretch justify-start rounded-xl border p-1 md:p-2 transition-all cursor-pointer overflow-hidden ${adminSelectedDate === ds ? 'bg-orange-50 border-orange-500 shadow-md ring-2 ring-orange-500 scale-[1.02] z-10' : isToday ? 'bg-gray-50 border-gray-300' : 'bg-white border-gray-200 hover:border-orange-300 hover:shadow-sm'} ${closureObj ? 'bg-gray-100 border-gray-300 opacity-90' : ''}`}
                           >
                             <span className={`text-xs md:text-sm font-bold mb-1.5 self-center ${isToday ? 'bg-orange-500 text-white rounded-full w-6 h-6 md:w-7 md:h-7 flex items-center justify-center shadow-sm' : (evs.length > 0 ? 'text-gray-800' : 'text-gray-400')}`}>{d}</span>
                             <div className="flex flex-col gap-1 w-full flex-1 overflow-y-auto hide-scrollbar">
-                              {evs.map((e, i) => {
-                                const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
-                                const blockBg = getDotColor(catColor);
-                                return (
-                                  <div key={i} className={`text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-white font-bold text-left mb-1 ${blockBg}`} title={`${e.gameType}-${e.title}`}>
-                                    {e.gameType}-{e.title}
-                                  </div>
-                                )
-                              })}
+                              {closureObj ? (
+                                <div className="text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-gray-700 bg-gray-300 font-black text-center mb-1 flex justify-center items-center gap-1"><Coffee className="w-3 h-3"/> {closureObj.reason}</div>
+                              ) : (
+                                evs.map((e, i) => {
+                                  const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
+                                  const blockBg = getDotColor(catColor);
+                                  return (
+                                    <div key={i} className={`text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-white font-bold text-left mb-1 ${blockBg}`} title={`${e.gameType}-${e.title}`}>
+                                      {e.gameType}-{e.title}
+                                    </div>
+                                  );
+                                })
+                              )}
                             </div>
                           </div>
                         );
@@ -931,8 +985,27 @@ export default function App() {
 
                   {adminSelectedDate && (
                     <div className="mt-8 pt-6 border-t-2 border-gray-100 space-y-4 animate-in slide-in-from-top-4">
-                      <h4 className="font-black text-gray-700 text-lg flex items-center gap-2 mb-5"><Calendar className="w-6 h-6 text-orange-500" /> {adminSelectedDate.replace(/-/g, '/')} 管理清單</h4>
-                      {tournaments.filter(t => t.date === adminSelectedDate).length === 0 ? (
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
+                        <h4 className="font-black text-gray-700 text-lg flex items-center gap-2"><Calendar className="w-6 h-6 text-orange-500" /> {adminSelectedDate.replace(/-/g, '/')} 管理清單</h4>
+                        
+                        {/* 店休設定區塊 */}
+                        {closures.find(c => c.date === adminSelectedDate) ? (
+                          <button onClick={() => handleToggleClosure(adminSelectedDate, closures.find(c => c.date === adminSelectedDate))} className="px-5 py-2.5 bg-gray-600 text-white font-black rounded-xl shadow-sm hover:bg-gray-700 transition-all flex items-center justify-center gap-2 text-sm"><X className="w-4 h-4"/> 解除店休日</button>
+                        ) : (
+                          <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-xl border border-gray-200">
+                            <input type="text" value={closureReason} onChange={e => setClosureReason(e.target.value)} placeholder="原因 (預設: 店休)" className="px-3 py-2 text-sm font-bold bg-white border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-gray-400 w-32 md:w-48" />
+                            <button onClick={() => handleToggleClosure(adminSelectedDate, null)} className="px-4 py-2 bg-gray-800 text-white font-black rounded-lg shadow-sm hover:bg-black transition-all flex items-center justify-center gap-1.5 text-sm whitespace-nowrap"><Coffee className="w-4 h-4"/> 設為店休</button>
+                          </div>
+                        )}
+                      </div>
+
+                      {closures.find(c => c.date === adminSelectedDate) ? (
+                        <div className="bg-gray-100 p-8 rounded-2xl text-center border-2 border-gray-300 border-dashed flex flex-col items-center justify-center">
+                          <Coffee className="w-12 h-12 text-gray-500 mb-3" />
+                          <h3 className="text-xl font-black text-gray-800 mb-1">今日已設定為：{closures.find(c => c.date === adminSelectedDate).reason}</h3>
+                          <p className="text-sm font-bold text-gray-500">解除店休後即可排定賽事</p>
+                        </div>
+                      ) : tournaments.filter(t => t.date === adminSelectedDate).length === 0 ? (
                         <p className="text-base text-gray-400 font-bold bg-gray-50 p-6 rounded-xl text-center border-2 border-gray-200 border-dashed">這天沒有賽事可以管理喔！</p>
                       ) : (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
