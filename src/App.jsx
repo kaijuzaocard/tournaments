@@ -24,8 +24,9 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 取得系統分配的 appId，做為資料庫唯一識別徑
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
+// 確保路徑中不包含會破壞 Firestore 結構的特殊字元
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
+const appId = String(rawAppId).replace(/\//g, '-');
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -61,8 +62,15 @@ export default function App() {
   const [notePresets, setNotePresets] = useState([]);
   const [newPresetTitle, setNewPresetTitle] = useState('');
   const [reservations, setReservations] = useState([]);
-  const [closures, setClosures] = useState([]); // 新增：店休狀態
-  const [closureReason, setClosureReason] = useState(''); // 新增：店休原因表單
+  const [closures, setClosures] = useState([]); 
+  const [specialOpenings, setSpecialOpenings] = useState([]); // 💡 新增：特別營業日
+  const [closureReason, setClosureReason] = useState(''); 
+  
+  // 批量店休狀態
+  const [batchStartDate, setBatchStartDate] = useState('');
+  const [batchEndDate, setBatchEndDate] = useState('');
+  const [batchReason, setBatchReason] = useState('');
+
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
 
@@ -81,7 +89,6 @@ export default function App() {
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [isSendingLine, setIsSendingLine] = useState(false);
   
-  // 💡 特助優化：加入優雅的提示框狀態，取代原生的 alert
   const [toastMsg, setToastMsg] = useState('');
 
   const categoryScrollRef = useRef(null);
@@ -192,7 +199,8 @@ export default function App() {
       data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     );
 
-    setupListener(getCollection('store_closures'), setClosures); // 新增：監聽店休資料
+    setupListener(getCollection('store_closures'), setClosures); 
+    setupListener(getCollection('special_openings'), setSpecialOpenings); // 監聽特別營業日
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
@@ -211,6 +219,32 @@ export default function App() {
       hasRandomizedBanner.current = true;
     }
   }, [tutorialBanners]);
+
+  // 💡 特助核心：取得當天的休假狀態（包含週二預設公休與自訂店休的判斷邏輯）
+  const getClosureObj = (dateStr) => {
+    if (!dateStr) return null;
+    
+    // 1. 優先檢查是否有人工設定的特別店休 (優先級最高)
+    const customClosure = closures.find(c => c.date === dateStr);
+    if (customClosure) return customClosure;
+    
+    // 2. 如果沒有人工店休，檢查是否為預設的週二
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      const d = new Date(parts[0], parts[1] - 1, parts[2]);
+      if (d.getDay() === 2) {
+        // 如果是週二，檢查是否有被設為「特別營業日」
+        const isSpecialOpen = specialOpenings.some(o => o.date === dateStr);
+        if (!isSpecialOpen) {
+          // 沒有被特別打開的話，那就是預設公休
+          return { reason: '週二固定公休', isDefault: true };
+        }
+      }
+    }
+    
+    // 3. 都不是的話，就是正常營業日
+    return null;
+  };
 
   const toggleNote = (e, id) => {
     e.preventDefault();
@@ -303,6 +337,19 @@ export default function App() {
   const handleReserveSubmit = async (e) => {
     e.preventDefault();
     if (!user || !reserveForm.name || !reserveForm.contact) return;
+
+    // 💡 預約時間防線：使用超聰明的 getClosureObj 統一驗證
+    const closureObj = getClosureObj(reserveForm.date);
+    if (closureObj) {
+      showToast(`⛔ 拍謝啦！這天基地剛好【${closureObj.reason}】，請改約其他天來玩喔！`);
+      return;
+    }
+
+    if (reserveForm.time < '13:00' || reserveForm.time > '21:00') {
+      showToast('⏰ 現場教學時間為 13:00~21:00，請重新選擇時段喔！');
+      return;
+    }
+
     try {
       const reserveData = { 
         ...reserveForm, 
@@ -350,25 +397,90 @@ export default function App() {
     catch (error) { console.error("Error deleting preset: ", error); }
   };
 
-  // 新增：處理店休設定與解除
-  const handleToggleClosure = async (dateStr, existingClosure) => {
+  // 💡 處理店長點擊行事曆狀態（結合預設公休與自訂店休的彈性處理）
+  const handleToggleDayStatus = async (dateStr) => {
     if (!user) return;
     try {
-      if (existingClosure) {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'store_closures', existingClosure.id));
-        showToast('✅ 已解除店休！');
+      const closureObj = getClosureObj(dateStr);
+      
+      if (closureObj) {
+        if (closureObj.isDefault) {
+          // 狀態一：如果是預設的週二，代表店長想把它「打開」變成特別營業日
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'special_openings'), {
+            date: dateStr,
+            createdAt: new Date().toISOString()
+          });
+          showToast('✨ 封印解除！已將此週二設為特別營業日！');
+        } else {
+          // 狀態二：如果是人工設定的店休（包含批量），代表店長想「解除店休」恢復營業
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'store_closures', closureObj.id));
+          showToast('✅ 已解除店休，恢復正常營業！');
+        }
       } else {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
-          date: dateStr,
-          reason: closureReason || '店休',
-          createdAt: new Date().toISOString()
-        });
-        showToast('⛔ 已設定為店休！');
-        setClosureReason(''); // 儲存後清空
+        // 目前是營業狀態，要把它關掉
+        const specialOpen = specialOpenings.find(o => o.date === dateStr);
+        if (specialOpen) {
+          // 狀態三：如果是被特別打開的週二，那就把「特別打開」的紀錄刪掉，它就會恢復預設公休
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'special_openings', specialOpen.id));
+          showToast('🔄 已取消特別營業，恢復週二固定公休！');
+        } else {
+          // 狀態四：正常營業的日子，店長想設為自訂店休
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
+            date: dateStr,
+            reason: closureReason || '店休',
+            createdAt: new Date().toISOString()
+          });
+          showToast('⛔ 已設定為店休！');
+          setClosureReason(''); 
+        }
       }
     } catch (err) {
       console.error(err);
-      showToast('❌ 設定店休失敗');
+      showToast('❌ 設定狀態失敗');
+    }
+  };
+
+  // 處理批量店休邏輯
+  const handleBatchClosure = async (e) => {
+    e.preventDefault();
+    if (!user || !batchStartDate || !batchEndDate) return;
+
+    const start = new Date(batchStartDate);
+    const end = new Date(batchEndDate);
+
+    if (start > end) {
+      showToast('❌ 結束日期不能早於開始日期喔！');
+      return;
+    }
+
+    try {
+      const promises = [];
+      let count = 0;
+      
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        
+        // 使用 getClosureObj 判斷，如果那一天還不是休假，才新增
+        if (!getClosureObj(dateStr)) {
+          promises.push(
+            addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
+              date: dateStr,
+              reason: batchReason || '店休',
+              createdAt: new Date().toISOString()
+            })
+          );
+          count++;
+        }
+      }
+      
+      await Promise.all(promises);
+      showToast(`✅ 狂！已成功批量設定 ${count} 天店休！`);
+      setBatchStartDate('');
+      setBatchEndDate('');
+      setBatchReason('');
+    } catch (err) {
+      console.error(err);
+      showToast('❌ 批量設定店休失敗');
     }
   };
 
@@ -447,7 +559,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-100 font-sans pb-12 relative">
-      {/* 導覽列寬度解放 */}
       <nav className="bg-orange-600 text-white shadow-lg sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center transition-all duration-300">
           <div className="flex items-center gap-2 font-black text-xl tracking-wider cursor-pointer" onClick={() => window.location.reload()}><Store className="w-6 h-6" /> 怪獸造咔</div>
@@ -458,7 +569,6 @@ export default function App() {
         </div>
       </nav>
 
-      {/* 主體寬度解放 */}
       <main className="max-w-6xl mx-auto p-4 space-y-6 mt-4 transition-all duration-300">
         {/* ========================================== */}
         {/* 玩家看版 (Player View) */}
@@ -471,7 +581,6 @@ export default function App() {
                 <p className="text-sm text-gray-500 font-bold flex items-center gap-1"><MapPin className="w-4 h-4" /> 台中市南區光輝街113號</p>
               </div>
               
-              {/* 大螢幕上的模式切換移到這裡，畫面更俐落 */}
               <div className="flex bg-gray-200 p-1.5 rounded-xl md:w-64">
                 <button onClick={() => setViewMode('list')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'list' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><LayoutList className="w-4 h-4 inline mr-1" /> 列表</button>
                 <button onClick={() => setViewMode('calendar')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'calendar' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Calendar className="w-4 h-4 inline mr-1" /> 行事曆</button>
@@ -497,18 +606,30 @@ export default function App() {
               </div>
             </div>
 
-            {/* 玩家版：列表模式 (RWD 網格排列) */}
+            {/* 玩家版：列表模式 */}
             {viewMode === 'list' && (() => {
               const now = new Date(); const next = new Date(now); next.setDate(now.getDate() + 14);
               const list = tournaments.filter(t => { const d = new Date(`${t.date}T${t.time}`); return d >= now && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); });
-              const upcomingClosures = closures.filter(c => { const d = new Date(`${c.date}T00:00:00`); return d >= now && d <= next; });
-              const combinedList = [...list, ...upcomingClosures.map(c => ({...c, isClosure: true}))].sort((a, b) => new Date(a.date) - new Date(b.date));
+              
+              // 💡 取得未來 14 天內所有的休假資料
+              const upcomingClosures = [];
+              for (let i = 0; i <= 14; i++) {
+                const checkDate = new Date(now);
+                checkDate.setDate(checkDate.getDate() + i);
+                const ds = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
+                const cObj = getClosureObj(ds);
+                if (cObj) {
+                  upcomingClosures.push({ ...cObj, date: ds, id: cObj.id || `default-closure-${ds}`, isClosure: true });
+                }
+              }
+
+              const combinedList = [...list, ...upcomingClosures].sort((a, b) => new Date(a.date) - new Date(b.date));
 
               return combinedList.length === 0 ? <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div> : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 max-h-[75vh] overflow-y-auto px-2 py-2 hide-scrollbar">
                   {combinedList.map(t => (
                     t.isClosure ? (
-                      <div key={`closure-${t.id}`} className="bg-gray-100 rounded-2xl p-5 shadow-sm border-l-4 border-gray-400 flex flex-col h-full justify-center items-center text-center opacity-80 min-h-[220px]">
+                      <div key={t.id} className="bg-gray-100 rounded-2xl p-5 shadow-sm border-l-4 border-gray-400 flex flex-col h-full justify-center items-center text-center opacity-80 min-h-[220px]">
                         <Coffee className="w-12 h-12 text-gray-500 mb-3" />
                         <div className="text-gray-500 font-black text-lg mb-2">{formatEventDate(t.date)}</div>
                         <h3 className="text-xl font-black text-gray-800">{t.reason}</h3>
@@ -562,7 +683,7 @@ export default function App() {
               );
             })()}
 
-            {/* 玩家版：圓點點行事曆 (自動適應螢幕) */}
+            {/* 玩家版：行事曆 */}
             {viewMode === 'calendar' && (
               <div className="bg-white rounded-2xl p-5 md:p-8 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-6">
@@ -590,7 +711,7 @@ export default function App() {
                       const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                       const events = tournaments.filter(t => t.date === ds && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
                       const isToday = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
-                      const closureObj = closures.find(c => c.date === ds);
+                      const closureObj = getClosureObj(ds); // 💡 使用共用函數驗證
 
                       cells.push(
                         <button key={ds} onClick={() => setSelectedDate(selectedDate === ds ? null : ds)} className={`relative h-14 md:h-24 flex flex-col items-center justify-center rounded-xl border transition-all ${selectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner md:scale-105' : isToday ? 'bg-gray-100 border-gray-300' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'} ${closureObj ? 'bg-gray-100/50 opacity-70' : ''}`}>
@@ -617,10 +738,10 @@ export default function App() {
                   <div className="mt-8 pt-6 border-t border-gray-100">
                     <h4 className="font-black text-gray-700 text-lg flex items-center gap-2 mb-4"><Calendar className="w-6 h-6 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事清單</h4>
                     
-                    {closures.find(c => c.date === selectedDate) ? (
+                    {getClosureObj(selectedDate) ? (
                       <div className="bg-gray-50 p-8 rounded-2xl text-center border-2 border-gray-200 border-dashed flex flex-col items-center justify-center">
                         <Coffee className="w-12 h-12 text-gray-400 mb-3" />
-                        <h3 className="text-xl font-black text-gray-700 mb-1">{closures.find(c => c.date === selectedDate).reason}</h3>
+                        <h3 className="text-xl font-black text-gray-700 mb-1">{getClosureObj(selectedDate).reason}</h3>
                         <p className="text-sm font-bold text-gray-500">今日基地沒有營業喔，別白跑一趟！</p>
                       </div>
                     ) : tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).length === 0 ? (
@@ -683,7 +804,6 @@ export default function App() {
               <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-4 py-2 rounded-bl-2xl shadow-sm">新手福利區</div>
               <h2 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-2 mb-6"><BookOpen className="w-6 md:w-8 h-6 md:h-8 text-orange-500" /> 預約新手教學 🎓</h2>
               
-              {/* 大螢幕版面：左圖右表單 */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
                 <div className="w-full">
                   <div className="px-1 mb-3">
@@ -715,8 +835,23 @@ export default function App() {
                       <form onSubmit={handleReserveSubmit} className="space-y-4">
                         <div><label className="text-xs font-bold text-gray-600 block mb-1.5">想學哪款遊戲？</label><select required value={reserveForm.gameType} onChange={e => setReserveForm({...reserveForm, gameType: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
                         <div className="grid grid-cols-2 gap-4">
-                          <div><label className="text-xs font-bold text-gray-600 block mb-1.5">希望日期</label><input required type="date" value={reserveForm.date} onChange={e => setReserveForm({...reserveForm, date: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
-                          <div><label className="text-xs font-bold text-gray-600 block mb-1.5">希望時間</label><input required type="time" value={reserveForm.time} onChange={e => setReserveForm({...reserveForm, time: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
+                          <div>
+                            <label className="text-xs font-bold text-gray-600 block mb-1.5">希望日期</label>
+                            <input required type="date" value={reserveForm.date} onChange={e => { 
+                              const val = e.target.value; 
+                              const closureObj = getClosureObj(val); 
+                              if(closureObj) { 
+                                showToast(`⛔ 拍謝啦！這天基地剛好【${closureObj.reason}】，請改約其他天喔！`); 
+                                setReserveForm({...reserveForm, date: ''}); 
+                              } else { 
+                                setReserveForm({...reserveForm, date: val}); 
+                              } 
+                            }} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold text-gray-600 block mb-1.5">希望時間 (13:00~21:00)</label>
+                            <input required type="time" min="13:00" max="21:00" value={reserveForm.time} onChange={e => { const t = e.target.value; if(t && (t < '13:00' || t > '21:00')) { showToast('⏰ 教學時間為 13:00~21:00，請重新選擇！'); setReserveForm({...reserveForm, time: ''}); } else { setReserveForm({...reserveForm, time: t}); } }} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" />
+                          </div>
                         </div>
                         <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><User className="w-4 h-4"/> 您的暱稱</label><input required type="text" placeholder="怎麼稱呼您呢" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
                         <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><Phone className="w-4 h-4"/> 聯絡方式</label><input required type="text" placeholder="LINE ID 或 手機號碼" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
@@ -757,7 +892,6 @@ export default function App() {
                 </div>
                 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* 💡 通訊診斷中心 */}
                   <div className="bg-green-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-lg md:text-xl flex items-center gap-2"><Send className="w-6 h-6" /> Google 試算表連動測試</span>
@@ -768,7 +902,6 @@ export default function App() {
                     <p className="text-xs md:text-sm opacity-90 leading-relaxed font-bold">※ 點擊按鈕測試是否能將資料送達您綁定的 Google 試算表與 LINE 群組。</p>
                   </div>
 
-                  {/* 系統狀態 */}
                   <div className="bg-blue-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-lg md:text-xl flex items-center gap-2">🚀 系統連線狀態</span>
@@ -779,9 +912,7 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                  {/* 左側兩欄寬度：發布賽事、標籤管理 */}
                   <div className="lg:col-span-2 space-y-6">
-                    {/* 新增賽事 (支援雙欄排列) */}
                     <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-gray-200">
                       <h2 className="text-xl md:text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><Plus className="w-6 h-6 md:w-8 md:h-8 text-orange-500" /> 發布新賽事情報</h2>
                       <form onSubmit={handleAddTournament} className="space-y-6">
@@ -803,7 +934,6 @@ export default function App() {
 
                         <div><label className="text-sm font-bold text-gray-600 block mb-2">報名費或方案</label><input required type="text" placeholder="例如: 200元 或 買2包" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.fee} onChange={e => setFormData({...formData, fee: e.target.value})} /></div>
                         
-                        {/* 備註模板區塊 */}
                         <div>
                           <label className="text-sm font-bold text-gray-600 block mb-2">備註與賽制說明</label>
                           <div className="mb-4 p-5 bg-orange-50 border border-orange-100 rounded-xl shadow-inner">
@@ -871,9 +1001,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 右側一欄：分類管理與教學管理 */}
                   <div className="space-y-6">
-                    {/* 遊戲分類管理 */}
                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                       <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Tags className="w-6 h-6 text-orange-500" /> 標籤管理</h2>
                       <div className="flex flex-wrap gap-2 mb-5">
@@ -894,7 +1022,6 @@ export default function App() {
                       </form>
                     </div>
 
-                    {/* 教學圖管理 */}
                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
                       <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 福利圖管理</h2>
                       <div className="grid grid-cols-2 gap-3 mb-5">
@@ -925,6 +1052,27 @@ export default function App() {
                 {/* ========================================== */}
                 <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-gray-200 mt-6">
                   <h2 className="text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><Calendar className="w-8 h-8 text-orange-500" /> 賽事總覽大月曆</h2>
+                  
+                  {/* 💡 批量店休設定區塊 */}
+                  <div className="mb-6 p-5 bg-gray-50 border border-gray-200 rounded-2xl shadow-inner">
+                    <h3 className="text-sm font-black text-gray-700 mb-4 flex items-center gap-1.5"><Coffee className="w-4 h-4 text-gray-500"/> 連假 / 批量店休一鍵設定</h3>
+                    <form onSubmit={handleBatchClosure} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label>
+                        <input type="date" required value={batchStartDate} onChange={e=>setBatchStartDate(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-gray-400 outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 block mb-1">結束日期</label>
+                        <input type="date" required value={batchEndDate} onChange={e=>setBatchEndDate(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-gray-400 outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 block mb-1">店休原因</label>
+                        <input type="text" placeholder="預設: 店休" value={batchReason} onChange={e=>setBatchReason(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-gray-400 outline-none" />
+                      </div>
+                      <button type="submit" className="w-full py-2.5 bg-gray-800 text-white font-black rounded-xl shadow-sm hover:bg-black active:scale-95 transition-all text-sm">一鍵整段店休！</button>
+                    </form>
+                  </div>
+
                   <div className="flex flex-col md:flex-row justify-between items-center mb-6 bg-gray-50 p-4 rounded-2xl border border-gray-100 gap-4">
                     <div className="flex items-center gap-4">
                       <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() - 1, 1))} className="p-2.5 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-6 h-6"/></button>
@@ -952,7 +1100,7 @@ export default function App() {
                         const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const evs = tournaments.filter(t => t.date === ds);
                         const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
-                        const closureObj = closures.find(c => c.date === ds);
+                        const closureObj = getClosureObj(ds);
 
                         cells.push(
                           <div 
@@ -988,22 +1136,28 @@ export default function App() {
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
                         <h4 className="font-black text-gray-700 text-lg flex items-center gap-2"><Calendar className="w-6 h-6 text-orange-500" /> {adminSelectedDate.replace(/-/g, '/')} 管理清單</h4>
                         
-                        {/* 店休設定區塊 */}
-                        {closures.find(c => c.date === adminSelectedDate) ? (
-                          <button onClick={() => handleToggleClosure(adminSelectedDate, closures.find(c => c.date === adminSelectedDate))} className="px-5 py-2.5 bg-gray-600 text-white font-black rounded-xl shadow-sm hover:bg-gray-700 transition-all flex items-center justify-center gap-2 text-sm"><X className="w-4 h-4"/> 解除店休日</button>
+                        {/* 💡 聰明的按鈕切換邏輯：根據是否為預設週二公休，顯示對應操作 */}
+                        {getClosureObj(adminSelectedDate) ? (
+                          getClosureObj(adminSelectedDate).isDefault ? (
+                            <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-5 py-2.5 bg-green-600 text-white font-black rounded-xl shadow-sm hover:bg-green-700 transition-all flex items-center justify-center gap-2 text-sm"><CheckCircle2 className="w-4 h-4"/> 設為特別營業日</button>
+                          ) : (
+                            <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-5 py-2.5 bg-gray-600 text-white font-black rounded-xl shadow-sm hover:bg-gray-700 transition-all flex items-center justify-center gap-2 text-sm"><X className="w-4 h-4"/> 解除店休</button>
+                          )
+                        ) : specialOpenings.find(o => o.date === adminSelectedDate) ? (
+                          <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-5 py-2.5 bg-orange-600 text-white font-black rounded-xl shadow-sm hover:bg-orange-700 transition-all flex items-center justify-center gap-2 text-sm"><Coffee className="w-4 h-4"/> 恢復週二公休</button>
                         ) : (
                           <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-xl border border-gray-200">
                             <input type="text" value={closureReason} onChange={e => setClosureReason(e.target.value)} placeholder="原因 (預設: 店休)" className="px-3 py-2 text-sm font-bold bg-white border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-gray-400 w-32 md:w-48" />
-                            <button onClick={() => handleToggleClosure(adminSelectedDate, null)} className="px-4 py-2 bg-gray-800 text-white font-black rounded-lg shadow-sm hover:bg-black transition-all flex items-center justify-center gap-1.5 text-sm whitespace-nowrap"><Coffee className="w-4 h-4"/> 設為店休</button>
+                            <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-4 py-2 bg-gray-800 text-white font-black rounded-lg shadow-sm hover:bg-black transition-all flex items-center justify-center gap-1.5 text-sm whitespace-nowrap"><Coffee className="w-4 h-4"/> 設為店休</button>
                           </div>
                         )}
                       </div>
 
-                      {closures.find(c => c.date === adminSelectedDate) ? (
+                      {getClosureObj(adminSelectedDate) ? (
                         <div className="bg-gray-100 p-8 rounded-2xl text-center border-2 border-gray-300 border-dashed flex flex-col items-center justify-center">
                           <Coffee className="w-12 h-12 text-gray-500 mb-3" />
-                          <h3 className="text-xl font-black text-gray-800 mb-1">今日已設定為：{closures.find(c => c.date === adminSelectedDate).reason}</h3>
-                          <p className="text-sm font-bold text-gray-500">解除店休後即可排定賽事</p>
+                          <h3 className="text-xl font-black text-gray-800 mb-1">今日狀態：{getClosureObj(adminSelectedDate).reason}</h3>
+                          <p className="text-sm font-bold text-gray-500">解除或設定特別營業後即可排定賽事</p>
                         </div>
                       ) : tournaments.filter(t => t.date === adminSelectedDate).length === 0 ? (
                         <p className="text-base text-gray-400 font-bold bg-gray-50 p-6 rounded-xl text-center border-2 border-gray-200 border-dashed">這天沒有賽事可以管理喔！</p>
