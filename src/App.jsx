@@ -25,9 +25,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 💡 取得系統分配的 appId，並強制替換所有斜線為連字號，確保 Firebase 集合路徑層級數量正確
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const appId = String(rawAppId).replace(/\//g, '-');
+// 💡 特助終極修復：將 appId 完全鎖死為 'kaijuzaocard-main'，確保 Vercel 上絕對能精準讀取舊資料！
+const appId = 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -35,7 +34,6 @@ export default function App() {
   const [currentView, setCurrentView] = useState('player'); 
   const [isLoading, setIsLoading] = useState(true);
 
-  // 💡 特助修復：移除了強制等待的狀態，完全交給真實資料決定
   const loadingMessages = [
     "🚀 連接光輝街 113 號基地中...",
     "🦖 野生的賽程表正在努力載入中...",
@@ -68,7 +66,6 @@ export default function App() {
   const [specialOpenings, setSpecialOpenings] = useState([]); 
   const [closureReason, setClosureReason] = useState(''); 
   
-  // 批量店休狀態
   const [batchStartDate, setBatchStartDate] = useState('');
   const [batchEndDate, setBatchEndDate] = useState('');
   const [batchReason, setBatchReason] = useState('');
@@ -135,8 +132,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // 💡 特助修復：移除了強制等待 1.5 秒的計時器 useEffect
-
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -171,21 +166,19 @@ export default function App() {
     const checkAllLoaded = () => {
       loadedCount++;
       if (loadedCount >= totalCollections) {
-        setIsLoading(false); // 💡 當所有雲端資料確認就緒，立刻關閉 Loading 動畫
+        setIsLoading(false);
       }
     };
 
     const setupListener = (colRef, setter, sortFn = null) => {
       let isServerDataLoaded = false;
       
-      // 💡 特助核心：加上 { includeMetadataChanges: true } 來精準判斷資料來源
       const unsub = onSnapshot(colRef, { includeMetadataChanges: true },
         (snapshot) => {
           let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           if (sortFn) data = sortFn(data);
           setter(data);
           
-          // 💡 只有當資料確定是從「雲端伺服器 (Server)」抓回來時，才算真正載入完畢 (排除本機空的暫存)
           if (!isServerDataLoaded && !snapshot.metadata.fromCache) {
             isServerDataLoaded = true;
             checkAllLoaded();
@@ -195,7 +188,7 @@ export default function App() {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
           if (!isServerDataLoaded) {
             isServerDataLoaded = true;
-            checkAllLoaded(); // 就算發生權限錯誤也要推進計數，避免畫面永遠卡在 Loading
+            checkAllLoaded(); 
           }
         }
       );
@@ -1123,7 +1116,7 @@ export default function App() {
                       for (let d = 1; d <= days; d++) {
                         const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const evs = tournaments.filter(t => t.date === ds);
-                        const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+                        const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
                         const closureObj = getClosureObj(ds);
 
                         cells.push(
