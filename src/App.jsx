@@ -35,6 +35,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('player'); 
   const [isLoading, setIsLoading] = useState(true);
 
+  // 💡 特助修復：移除了強制等待的狀態，完全交給真實資料決定
   const loadingMessages = [
     "🚀 連接光輝街 113 號基地中...",
     "🦖 野生的賽程表正在努力載入中...",
@@ -134,6 +135,8 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // 💡 特助修復：移除了強制等待 1.5 秒的計時器 useEffect
+
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -168,28 +171,31 @@ export default function App() {
     const checkAllLoaded = () => {
       loadedCount++;
       if (loadedCount >= totalCollections) {
-        setIsLoading(false);
+        setIsLoading(false); // 💡 當所有雲端資料確認就緒，立刻關閉 Loading 動畫
       }
     };
 
     const setupListener = (colRef, setter, sortFn = null) => {
-      let isFirstLoad = true;
-      const unsub = onSnapshot(colRef, 
+      let isServerDataLoaded = false;
+      
+      // 💡 特助核心：加上 { includeMetadataChanges: true } 來精準判斷資料來源
+      const unsub = onSnapshot(colRef, { includeMetadataChanges: true },
         (snapshot) => {
           let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           if (sortFn) data = sortFn(data);
           setter(data);
           
-          if (isFirstLoad) {
-            isFirstLoad = false;
+          // 💡 只有當資料確定是從「雲端伺服器 (Server)」抓回來時，才算真正載入完畢 (排除本機空的暫存)
+          if (!isServerDataLoaded && !snapshot.metadata.fromCache) {
+            isServerDataLoaded = true;
             checkAllLoaded();
           }
         }, 
         (err) => {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
-          if (isFirstLoad) {
-            isFirstLoad = false;
-            checkAllLoaded(); 
+          if (!isServerDataLoaded) {
+            isServerDataLoaded = true;
+            checkAllLoaded(); // 就算發生權限錯誤也要推進計數，避免畫面永遠卡在 Loading
           }
         }
       );
