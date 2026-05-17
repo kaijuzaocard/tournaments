@@ -53,7 +53,6 @@ export default function App() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
 
-  // 💡 特助新增：控制日期群組收合狀態的 State (紀錄哪些日期被折疊了)
   const [collapsedDates, setCollapsedDates] = useState({});
 
   const [adminMonth, setAdminMonth] = useState(new Date());
@@ -270,7 +269,6 @@ export default function App() {
     setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // 💡 特助新增：切換日期收合狀態
   const toggleDateCollapse = (date) => {
     setCollapsedDates(prev => ({ ...prev, [date]: !prev[date] }));
   };
@@ -524,10 +522,11 @@ export default function App() {
     return dotMap[bgClass] || 'bg-gray-500';
   };
 
-  // 💡 特助 UX 升級：放大字體與邊距，讓標籤更清晰好閱讀
-  const GameBadge = ({ type }) => {
+  // 💡 特助 UX 升級：藍圈需求，加入 size 參數，讓標籤在需要的地方更明顯
+  const GameBadge = ({ type, size = 'sm' }) => {
     const cat = categories.find(c => c.gameType === type) || { label: type, color: 'bg-gray-200' };
-    return <span className={`px-2.5 py-1 text-xs font-black rounded-md text-black shadow-sm ${cat.color}`}>{cat.label}</span>;
+    const sizeClasses = size === 'md' ? 'px-3 py-1 text-[13px] md:text-sm' : 'px-2 py-0.5 text-[11px]';
+    return <span className={`${sizeClasses} font-black rounded text-black shadow-sm ${cat.color} shrink-0`}>{cat.label}</span>;
   };
 
   const ImageCarousel = ({ tournament }) => {
@@ -606,9 +605,16 @@ export default function App() {
             <div className="flex flex-col gap-3">
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
               
-              <div className="flex flex-wrap gap-2 px-1">
-                <span className="text-[10px] md:text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-2 py-1 rounded-md inline-flex items-center shadow-sm">💡 分類按鈕可「多選」篩選！</span>
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="text-[10px] md:text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 px-3 py-1 rounded-md inline-flex items-center shadow-sm active:scale-95 transition-all">🎓 預約新手教學 👉</button>
+              {/* 💡 頂級 UX 升級：紅圈需求，分離教學按鈕並放大，強化導流 */}
+              <div className="flex flex-col gap-3 px-1 mb-1">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <span className="text-[10px] md:text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg inline-flex items-center shadow-sm w-fit">
+                    💡 標籤可「多選」篩選喔！
+                  </span>
+                  <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-sm md:text-base font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all">
+                    🎓 點我快速預約【新手教學】 👉
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-1 w-full">
@@ -622,14 +628,13 @@ export default function App() {
               </div>
             </div>
 
-            {/* 💡 終極進化：可收合、自動預覽標籤的儀表板排版 */}
+            {/* 列表模式：包含收合、標籤放大與單行店休 */}
             {viewMode === 'list' && (() => {
               const startOfToday = new Date();
               startOfToday.setHours(0, 0, 0, 0);
               const next = new Date(startOfToday); 
               next.setDate(next.getDate() + 14);
 
-              // 篩選未來 14 天賽事
               const list = tournaments.filter(t => { 
                 if (!t.date) return false;
                 const parts = t.date.split('-');
@@ -637,7 +642,6 @@ export default function App() {
                 return d >= startOfToday && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); 
               });
               
-              // 篩選未來 14 天店休
               const upcomingClosures = [];
               for (let i = 0; i <= 14; i++) {
                 const checkDate = new Date(startOfToday);
@@ -649,7 +653,6 @@ export default function App() {
                 }
               }
 
-              // 將賽事與店休依日期分組
               const grouped = {};
               list.forEach(t => {
                 if (!grouped[t.date]) grouped[t.date] = { isClosure: false, reason: '', events: [] };
@@ -673,9 +676,24 @@ export default function App() {
                   {sortedDates.map(date => {
                     const dayData = grouped[date];
                     const isCollapsed = collapsedDates[date];
-                    // 💡 特助新增：抓取當日所有的遊戲標籤種類，用於標題列預覽
                     const dayGameTypes = [...new Set(dayData.events.map(e => e.gameType))];
 
+                    // 💡 黃圈升級：如果是店休，直接用單行橫幅顯示，乾淨俐落！
+                    if (dayData.isClosure) {
+                      return (
+                        <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-gray-100 overflow-hidden opacity-90 flex items-center justify-between px-4 md:px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <Calendar className="w-5 h-5 text-gray-400" />
+                            <span className="font-black text-gray-500 text-lg md:text-xl tracking-wide line-through decoration-gray-400">{formatEventDate(date)}</span>
+                          </div>
+                          <div className="bg-gray-200/80 text-gray-600 font-black px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm shadow-inner shrink-0">
+                            <Coffee className="w-4 h-4" /> {dayData.reason}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // 正常的賽事日排版
                     return (
                       <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-white overflow-hidden transition-all duration-300">
                         
@@ -684,20 +702,21 @@ export default function App() {
                           className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-200 px-4 md:px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors group"
                           onClick={() => toggleDateCollapse(date)}
                         >
-                          <div className="flex items-center gap-3">
-                            <Calendar className="w-5 h-5 text-orange-600 group-hover:scale-110 transition-transform" />
-                            <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Calendar className="w-5 h-5 text-orange-600 group-hover:scale-110 transition-transform" />
+                              <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
+                            </div>
                             
-                            {/* 💡 當日賽事標籤預覽 (店休不顯示) */}
-                            {!dayData.isClosure && dayGameTypes.length > 0 && (
-                              <div className="flex items-center gap-1.5 ml-1 md:ml-3">
-                                {dayGameTypes.map(type => <GameBadge key={type} type={type} />)}
+                            {/* 💡 藍圈升級：當日賽事標籤預覽放大版 */}
+                            {dayGameTypes.length > 0 && (
+                              <div className="flex items-center gap-1.5 ml-0 md:ml-3">
+                                {dayGameTypes.map(type => <GameBadge key={type} type={type} size="md" />)}
                               </div>
                             )}
                           </div>
 
-                          {/* 💡 收合箭頭提示 */}
-                          <div className={`p-1 rounded-full text-gray-400 group-hover:bg-gray-200 group-hover:text-orange-600 transition-all ${isCollapsed ? '' : 'rotate-180'}`}>
+                          <div className={`p-1 rounded-full text-gray-400 group-hover:bg-gray-200 group-hover:text-orange-600 transition-all shrink-0 ml-2 ${isCollapsed ? '' : 'rotate-180'}`}>
                             <ChevronDown className="w-5 h-5" />
                           </div>
                         </div>
@@ -705,98 +724,79 @@ export default function App() {
                         {/* 內容區塊 (受收合狀態控制) */}
                         {!isCollapsed && (
                           <div className="p-4 md:p-5 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
-                            {/* ☕ 店休狀態輕量化排版 */}
-                            {dayData.isClosure ? (
-                              <div className="bg-gray-50/80 rounded-xl py-6 px-4 flex items-center gap-4 text-gray-500 border border-gray-100 border-dashed justify-center">
-                                <Coffee className="w-8 h-8 opacity-50 shrink-0 text-gray-400" />
-                                <div>
-                                  <div className="font-black text-lg text-gray-700">{dayData.reason}</div>
-                                  <div className="text-sm font-bold mt-0.5">這天基地休息喔，別白跑一趟！</div>
-                                </div>
-                              </div>
-                            ) : dayData.events.length === 0 ? null : (
-                              
-                              /* ⚔️ 極致壓縮留白的橫向賽事排版 */
-                              <div className="flex flex-col gap-3">
-                                {dayData.events.map(t => {
-                                  const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
-                                  const isExpanded = expandedNotes[t.id];
+                            <div className="flex flex-col gap-3">
+                              {dayData.events.map(t => {
+                                const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
+                                const isExpanded = expandedNotes[t.id];
 
-                                  return (
-                                    <div 
-                                      key={t.id} 
-                                      className={`group rounded-xl border border-gray-200 bg-white transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:border-orange-300 hover:shadow-md hover:bg-orange-50/30' : ''}`} 
-                                      onClick={(e) => hasDetails && toggleNote(e, t.id)}
-                                    >
-                                      <div className="p-4 flex flex-row items-center gap-3 md:gap-5 relative">
-                                        
-                                        {/* 左側：俐落的時間方塊 */}
-                                        <div className="shrink-0 w-16 md:w-20 text-center">
-                                          <span className="text-xl md:text-2xl font-black text-orange-600 tracking-tighter drop-shadow-sm">{t.time}</span>
-                                        </div>
-                                        
-                                        {/* 分隔線 (桌面版顯示) */}
-                                        <div className="hidden md:block w-1 h-10 bg-gray-100 rounded-full shrink-0"></div>
-                                        
-                                        {/* 中間：主客歸位的資訊層次 */}
-                                        <div className="flex-1 min-w-0 py-1">
-                                          <div className="flex items-center flex-wrap gap-1.5 mb-1">
-                                            <GameBadge type={t.gameType} />
-                                            <span className="text-[11px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
-                                          </div>
-                                          <h4 className="font-black text-gray-800 text-lg md:text-xl leading-snug break-words pr-2">{t.title}</h4>
-                                        </div>
-
-                                        {/* 右側：明顯的互動按鈕 */}
-                                        {hasDetails && (
-                                          <div className="shrink-0 pl-1 flex flex-col items-center gap-1">
-                                            <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center transition-colors shadow-sm border ${isExpanded ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-400 group-hover:bg-orange-100 group-hover:border-orange-300 group-hover:text-orange-600'}`}>
-                                              {isExpanded ? <ChevronUp className="w-4 h-4 md:w-5 md:h-5" /> : <ChevronDown className="w-4 h-4 md:w-5 md:h-5" />}
-                                            </div>
-                                          </div>
-                                        )}
+                                return (
+                                  <div 
+                                    key={t.id} 
+                                    className={`group rounded-xl border border-gray-200 bg-white transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:border-orange-300 hover:shadow-md hover:bg-orange-50/30' : ''}`} 
+                                    onClick={(e) => hasDetails && toggleNote(e, t.id)}
+                                  >
+                                    <div className="p-4 flex flex-row items-center gap-3 md:gap-5 relative">
+                                      
+                                      <div className="shrink-0 w-16 md:w-20 text-center">
+                                        <span className="text-xl md:text-2xl font-black text-orange-600 tracking-tighter drop-shadow-sm">{t.time}</span>
                                       </div>
                                       
-                                      {/* 手機版展開提示 */}
-                                      {hasDetails && !isExpanded && (
-                                        <div className="md:hidden text-center text-[10px] font-bold text-gray-400 pb-2 group-hover:text-orange-500 transition-colors">
-                                          👆 點擊卡片查看賽制與獎勵
+                                      <div className="hidden md:block w-1 h-10 bg-gray-100 rounded-full shrink-0"></div>
+                                      
+                                      <div className="flex-1 min-w-0 py-1">
+                                        <div className="flex items-center flex-wrap gap-1.5 mb-1">
+                                          <GameBadge type={t.gameType} />
+                                          <span className="text-[11px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
                                         </div>
-                                      )}
+                                        <h4 className="font-black text-gray-800 text-lg md:text-xl leading-snug break-words pr-2">{t.title}</h4>
+                                      </div>
 
-                                      {/* 備註與圖庫展開區 */}
-                                      {isExpanded && (
-                                        <div className="px-4 md:px-5 pb-5 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
-                                          <div className="pt-4 border-t border-gray-100">
-                                            <ImageCarousel tournament={t} />
-                                            <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
-                                            
-                                            {t.prizeImages && t.prizeImages.length > 0 && (
-                                              <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                                <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                                  <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
-                                                </div>
-                                                <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
-                                                  {t.prizeImages.map((img, i) => (
-                                                    <img 
-                                                      key={`prize-img-${i}`} 
-                                                      src={img} 
-                                                      alt={`豪華獎品 ${i+1}`} 
-                                                      className="w-full h-auto rounded-xl border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                                      onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                                    />
-                                                  ))}
-                                                </div>
-                                              </div>
-                                            )}
+                                      {hasDetails && (
+                                        <div className="shrink-0 pl-1 flex flex-col items-center gap-1">
+                                          <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center transition-colors shadow-sm border ${isExpanded ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-400 group-hover:bg-orange-100 group-hover:border-orange-300 group-hover:text-orange-600'}`}>
+                                            {isExpanded ? <ChevronUp className="w-4 h-4 md:w-5 md:h-5" /> : <ChevronDown className="w-4 h-4 md:w-5 md:h-5" />}
                                           </div>
                                         </div>
                                       )}
                                     </div>
-                                  );
-                                })}
-                              </div>
-                            )}
+                                    
+                                    {hasDetails && !isExpanded && (
+                                      <div className="md:hidden text-center text-[10px] font-bold text-gray-400 pb-2 group-hover:text-orange-500 transition-colors">
+                                        👆 點擊卡片查看賽制與獎勵
+                                      </div>
+                                    )}
+
+                                    {isExpanded && (
+                                      <div className="px-4 md:px-5 pb-5 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
+                                        <div className="pt-4 border-t border-gray-100">
+                                          <ImageCarousel tournament={t} />
+                                          <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
+                                          
+                                          {t.prizeImages && t.prizeImages.length > 0 && (
+                                            <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
+                                              <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
+                                                <Gift className="w-4 h-4 text-orange-500" /> 豪華獎勵一覽
+                                              </div>
+                                              <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+                                                {t.prizeImages.map((img, i) => (
+                                                  <img 
+                                                    key={`prize-img-${i}`} 
+                                                    src={img} 
+                                                    alt={`豪華獎品 ${i+1}`} 
+                                                    className="w-full h-auto rounded-xl border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                                                    onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                                  />
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                       </div>
