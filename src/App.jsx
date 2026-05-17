@@ -144,13 +144,14 @@ export default function App() {
         }
       } catch (error) {
         console.error("Firebase 驗證失敗", error);
-        setIsLoading(false);
+        setIsLoading(false); // 只有在真的大斷線失敗時，才解除 Loading
       }
     };
     initAuth();
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (!currentUser) setIsLoading(false);
+      // 💡 特助修復核心：刪除了原本會「提早關閉 Loading 動畫」的錯誤防呆邏輯！
+      // 統一交給下方的 7 個資料庫小精靈來決定什麼時候關閉動畫。
     });
     return () => unsubscribeAuth();
   }, []);
