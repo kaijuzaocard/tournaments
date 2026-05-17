@@ -7,6 +7,7 @@ import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Imag
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
 // ==========================================
+// 💡 注意：如果您部署到 Vercel 或 Bolt，必須將下方的內容替換為您自己申請的 Firebase 設定！
 const myFirebaseConfig = {
   apiKey: "AIzaSyCaPWSmVV_R3zeGVeYj_g_AFu_JE-sGlpI",
   authDomain: "kaijuzaocard-tournaments.firebaseapp.com",
@@ -63,7 +64,7 @@ export default function App() {
   const [newPresetTitle, setNewPresetTitle] = useState('');
   const [reservations, setReservations] = useState([]);
   const [closures, setClosures] = useState([]); 
-  const [specialOpenings, setSpecialOpenings] = useState([]); // 💡 新增：特別營業日
+  const [specialOpenings, setSpecialOpenings] = useState([]); 
   const [closureReason, setClosureReason] = useState(''); 
   
   // 批量店休狀態
@@ -162,17 +163,37 @@ export default function App() {
     
     const unsubs = [];
 
+    // 💡 特助修復：新增載入計數器，確保所有資料都抓完才關閉 Loading 畫面
+    let loadedCount = 0;
+    const totalCollections = 7; // 我們目前監聽了 7 個資料表
+
+    const checkAllLoaded = () => {
+      loadedCount++;
+      if (loadedCount >= totalCollections) {
+        setIsLoading(false);
+      }
+    };
+
     const setupListener = (colRef, setter, sortFn = null) => {
+      let isFirstLoad = true;
       const unsub = onSnapshot(colRef, 
         (snapshot) => {
           let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           if (sortFn) data = sortFn(data);
           setter(data);
-          if (isLoading) setIsLoading(false);
+          
+          // 💡 只有第一次載入時觸發計數，後續即時更新不影響 Loading 狀態
+          if (isFirstLoad) {
+            isFirstLoad = false;
+            checkAllLoaded();
+          }
         }, 
         (err) => {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
-          if (isLoading) setIsLoading(false);
+          if (isFirstLoad) {
+            isFirstLoad = false;
+            checkAllLoaded(); // 就算發生錯誤也要推進計數，避免畫面卡死在動畫
+          }
         }
       );
       unsubs.push(unsub);
@@ -200,15 +221,16 @@ export default function App() {
     );
 
     setupListener(getCollection('store_closures'), setClosures); 
-    setupListener(getCollection('special_openings'), setSpecialOpenings); // 監聽特別營業日
+    setupListener(getCollection('special_openings'), setSpecialOpenings);
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
 
   useEffect(() => {
+    // 💡 放寬備用防呆計時器：從 4 秒延長到 6 秒，給雲端資料庫多一點點時間抓取全部內容
     const fallbackTimer = setTimeout(() => {
       setIsLoading(false);
-    }, 4000);
+    }, 6000);
     return () => clearTimeout(fallbackTimer);
   }, []);
 
@@ -220,29 +242,21 @@ export default function App() {
     }
   }, [tutorialBanners]);
 
-  // 💡 特助核心：取得當天的休假狀態（包含週二預設公休與自訂店休的判斷邏輯）
   const getClosureObj = (dateStr) => {
     if (!dateStr) return null;
-    
-    // 1. 優先檢查是否有人工設定的特別店休 (優先級最高)
     const customClosure = closures.find(c => c.date === dateStr);
     if (customClosure) return customClosure;
     
-    // 2. 如果沒有人工店休，檢查是否為預設的週二
     const parts = dateStr.split('-');
     if (parts.length === 3) {
       const d = new Date(parts[0], parts[1] - 1, parts[2]);
       if (d.getDay() === 2) {
-        // 如果是週二，檢查是否有被設為「特別營業日」
         const isSpecialOpen = specialOpenings.some(o => o.date === dateStr);
         if (!isSpecialOpen) {
-          // 沒有被特別打開的話，那就是預設公休
           return { reason: '週二固定公休', isDefault: true };
         }
       }
     }
-    
-    // 3. 都不是的話，就是正常營業日
     return null;
   };
 
@@ -338,7 +352,6 @@ export default function App() {
     e.preventDefault();
     if (!user || !reserveForm.name || !reserveForm.contact) return;
 
-    // 💡 預約時間防線：使用超聰明的 getClosureObj 統一驗證
     const closureObj = getClosureObj(reserveForm.date);
     if (closureObj) {
       showToast(`⛔ 拍謝啦！這天基地剛好【${closureObj.reason}】，請改約其他天來玩喔！`);
@@ -397,7 +410,6 @@ export default function App() {
     catch (error) { console.error("Error deleting preset: ", error); }
   };
 
-  // 💡 處理店長點擊行事曆狀態（結合預設公休與自訂店休的彈性處理）
   const handleToggleDayStatus = async (dateStr) => {
     if (!user) return;
     try {
@@ -405,26 +417,21 @@ export default function App() {
       
       if (closureObj) {
         if (closureObj.isDefault) {
-          // 狀態一：如果是預設的週二，代表店長想把它「打開」變成特別營業日
           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'special_openings'), {
             date: dateStr,
             createdAt: new Date().toISOString()
           });
           showToast('✨ 封印解除！已將此週二設為特別營業日！');
         } else {
-          // 狀態二：如果是人工設定的店休（包含批量），代表店長想「解除店休」恢復營業
           await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'store_closures', closureObj.id));
           showToast('✅ 已解除店休，恢復正常營業！');
         }
       } else {
-        // 目前是營業狀態，要把它關掉
         const specialOpen = specialOpenings.find(o => o.date === dateStr);
         if (specialOpen) {
-          // 狀態三：如果是被特別打開的週二，那就把「特別打開」的紀錄刪掉，它就會恢復預設公休
           await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'special_openings', specialOpen.id));
           showToast('🔄 已取消特別營業，恢復週二固定公休！');
         } else {
-          // 狀態四：正常營業的日子，店長想設為自訂店休
           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
             date: dateStr,
             reason: closureReason || '店休',
@@ -440,7 +447,6 @@ export default function App() {
     }
   };
 
-  // 處理批量店休邏輯
   const handleBatchClosure = async (e) => {
     e.preventDefault();
     if (!user || !batchStartDate || !batchEndDate) return;
@@ -459,8 +465,6 @@ export default function App() {
       
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        
-        // 使用 getClosureObj 判斷，如果那一天還不是休假，才新增
         if (!getClosureObj(dateStr)) {
           promises.push(
             addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
@@ -484,10 +488,13 @@ export default function App() {
     }
   };
 
+  // 💡 安全的日期格式化與防時區轉換
   const formatEventDate = (dateString) => {
     if (!dateString) return '';
     if (typeof dateString !== 'string') return String(dateString);
-    const date = new Date(dateString);
+    const parts = dateString.split('-');
+    if (parts.length !== 3) return dateString;
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
     if (isNaN(date.getTime())) return dateString; 
     const days = ['日', '一', '二', '三', '四', '五', '六'];
     return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}(${days[date.getDay()]})`;
@@ -606,15 +613,24 @@ export default function App() {
               </div>
             </div>
 
-            {/* 玩家版：列表模式 */}
+            {/* 💡 修復：玩家版列表模式 (解決時間隱藏問題) */}
             {viewMode === 'list' && (() => {
-              const now = new Date(); const next = new Date(now); next.setDate(now.getDate() + 14);
-              const list = tournaments.filter(t => { const d = new Date(`${t.date}T${t.time}`); return d >= now && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); });
+              // 取得今天的凌晨 00:00:00，確保今天的賽事整天都會顯示
+              const startOfToday = new Date();
+              startOfToday.setHours(0, 0, 0, 0);
+              const next = new Date(startOfToday); 
+              next.setDate(next.getDate() + 14);
+
+              const list = tournaments.filter(t => { 
+                if (!t.date) return false;
+                const parts = t.date.split('-');
+                const d = new Date(parts[0], parts[1] - 1, parts[2]);
+                return d >= startOfToday && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); 
+              });
               
-              // 💡 取得未來 14 天內所有的休假資料
               const upcomingClosures = [];
               for (let i = 0; i <= 14; i++) {
-                const checkDate = new Date(now);
+                const checkDate = new Date(startOfToday);
                 checkDate.setDate(checkDate.getDate() + i);
                 const ds = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
                 const cObj = getClosureObj(ds);
@@ -623,7 +639,14 @@ export default function App() {
                 }
               }
 
-              const combinedList = [...list, ...upcomingClosures].sort((a, b) => new Date(a.date) - new Date(b.date));
+              const combinedList = [...list, ...upcomingClosures].sort((a, b) => {
+                const dateA = new Date(a.date.split('-')[0], a.date.split('-')[1] - 1, a.date.split('-')[2]);
+                const dateB = new Date(b.date.split('-')[0], b.date.split('-')[1] - 1, b.date.split('-')[2]);
+                if (dateA.getTime() === dateB.getTime() && a.time && b.time) {
+                  return a.time.localeCompare(b.time);
+                }
+                return dateA - dateB;
+              });
 
               return combinedList.length === 0 ? <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div> : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 max-h-[75vh] overflow-y-auto px-2 py-2 hide-scrollbar">
@@ -683,7 +706,7 @@ export default function App() {
               );
             })()}
 
-            {/* 玩家版：行事曆 */}
+            {/* 玩家版：圓點點行事曆 */}
             {viewMode === 'calendar' && (
               <div className="bg-white rounded-2xl p-5 md:p-8 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-6">
@@ -711,7 +734,7 @@ export default function App() {
                       const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                       const events = tournaments.filter(t => t.date === ds && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
                       const isToday = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
-                      const closureObj = getClosureObj(ds); // 💡 使用共用函數驗證
+                      const closureObj = getClosureObj(ds);
 
                       cells.push(
                         <button key={ds} onClick={() => setSelectedDate(selectedDate === ds ? null : ds)} className={`relative h-14 md:h-24 flex flex-col items-center justify-center rounded-xl border transition-all ${selectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner md:scale-105' : isToday ? 'bg-gray-100 border-gray-300' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'} ${closureObj ? 'bg-gray-100/50 opacity-70' : ''}`}>
@@ -1001,7 +1024,9 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* 右側一欄：分類管理與教學管理 */}
                   <div className="space-y-6">
+                    {/* 遊戲分類管理 */}
                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                       <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Tags className="w-6 h-6 text-orange-500" /> 標籤管理</h2>
                       <div className="flex flex-wrap gap-2 mb-5">
@@ -1022,6 +1047,7 @@ export default function App() {
                       </form>
                     </div>
 
+                    {/* 教學圖管理 */}
                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
                       <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 福利圖管理</h2>
                       <div className="grid grid-cols-2 gap-3 mb-5">
