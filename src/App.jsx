@@ -25,8 +25,9 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 💡 特助終極修復：將 appId 完全鎖死為 'kaijuzaocard-main'，確保 Vercel 上絕對能精準讀取舊資料！
-const appId = 'kaijuzaocard-main';
+// 💡 特助修復：精準擷取基底 appId，避免在測試環境中發生權限錯誤，且確保正式環境可無縫接軌！
+const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
+const appId = rawAppId.split('/')[0];
 
 export default function App() {
   const [user, setUser] = useState(null);
