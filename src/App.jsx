@@ -7,7 +7,6 @@ import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Imag
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
 // ==========================================
-// 💡 注意：如果您部署到 Vercel 或 Bolt，必須將下方的內容替換為您自己申請的 Firebase 設定！
 const myFirebaseConfig = {
   apiKey: "AIzaSyCaPWSmVV_R3zeGVeYj_g_AFu_JE-sGlpI",
   authDomain: "kaijuzaocard-tournaments.firebaseapp.com",
@@ -25,9 +24,9 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 💡 取得系統分配的 appId，並強制替換所有斜線為連字號，確保 Firebase 集合路徑層級數量正確
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const appId = String(rawAppId).replace(/\//g, '-');
+// 💡 特助修復：恢復雙棲自動偵測機制
+// 在預覽環境使用系統分配的 ID，部署到 Vercel 時會自動切換為您的 'kaijuzaocard-main' 讀取真實資料
+const appId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -67,7 +66,6 @@ export default function App() {
   const [specialOpenings, setSpecialOpenings] = useState([]); 
   const [closureReason, setClosureReason] = useState(''); 
   
-  // 批量店休狀態
   const [batchStartDate, setBatchStartDate] = useState('');
   const [batchEndDate, setBatchEndDate] = useState('');
   const [batchReason, setBatchReason] = useState('');
@@ -138,7 +136,12 @@ export default function App() {
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
+          try {
+            await signInWithCustomToken(auth, __initial_auth_token);
+          } catch (e) {
+            console.warn("Custom token failed, falling back to anonymous");
+            await signInAnonymously(auth);
+          }
         } else {
           await signInAnonymously(auth); 
         }
@@ -162,36 +165,36 @@ export default function App() {
     
     const unsubs = [];
 
-    // 💡 特助修復：精準的 Loading 載入控制，確保不被空快取給騙了！
-    let loadedFlags = {
-      t: false, c: false, np: false, tr: false, tb: false, sc: false, so: false
-    };
+    let loadedCount = 0;
+    const totalCollections = 7; 
 
     const checkAllLoaded = () => {
-      if (Object.values(loadedFlags).every(v => v === true)) {
-        setTimeout(() => setIsLoading(false), 200); // 稍微給 React 200ms 的繪製時間，確保畫面不閃爍
+      loadedCount++;
+      if (loadedCount >= totalCollections) {
+        setTimeout(() => setIsLoading(false), 200); 
       }
     };
 
-    const setupListener = (colRef, flagKey, setter, sortFn = null) => {
+    const setupListener = (colRef, setter, sortFn = null) => {
+      let isFirstLoad = true;
       const unsub = onSnapshot(colRef, { includeMetadataChanges: true },
         (snapshot) => {
           let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           if (sortFn) data = sortFn(data);
           setter(data);
           
-          if (!loadedFlags[flagKey]) {
-            // 💡 如果是從伺服器抓到的，或者快取裡面確實「有資料」，才算真的載入完畢
-            if (!snapshot.metadata.fromCache || data.length > 0) {
-              loadedFlags[flagKey] = true;
-              checkAllLoaded();
-            }
+          if (isFirstLoad && !snapshot.metadata.fromCache) {
+            isFirstLoad = false;
+            checkAllLoaded();
+          } else if (isFirstLoad && data.length > 0) {
+            isFirstLoad = false;
+            checkAllLoaded();
           }
         }, 
         (err) => {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
-          if (!loadedFlags[flagKey]) {
-            loadedFlags[flagKey] = true;
+          if (isFirstLoad) {
+            isFirstLoad = false;
             checkAllLoaded(); 
           }
         }
@@ -199,35 +202,34 @@ export default function App() {
       unsubs.push(unsub);
     };
 
-    setupListener(getCollection('monster_tournaments'), 't', setTournaments, (data) => 
+    setupListener(getCollection('monster_tournaments'), setTournaments, (data) => 
       data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`))
     );
 
-    setupListener(getCollection('game_categories'), 'c', (data) => {
+    setupListener(getCollection('game_categories'), (data) => {
       setCategories(data);
       if (data.length > 0 && !reserveForm.gameType) {
         setReserveForm(prev => ({ ...prev, gameType: data[0].gameType }));
       }
     });
 
-    setupListener(getCollection('note_presets'), 'np', setNotePresets);
+    setupListener(getCollection('note_presets'), setNotePresets);
 
-    setupListener(getCollection('tutorial_reservations'), 'tr', setReservations, (data) =>
+    setupListener(getCollection('tutorial_reservations'), setReservations, (data) =>
       data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     );
 
-    setupListener(getCollection('tutorial_banners'), 'tb', setTutorialBanners, (data) =>
+    setupListener(getCollection('tutorial_banners'), setTutorialBanners, (data) =>
       data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     );
 
-    setupListener(getCollection('store_closures'), 'sc', setClosures); 
-    setupListener(getCollection('special_openings'), 'so', setSpecialOpenings);
+    setupListener(getCollection('store_closures'), setClosures); 
+    setupListener(getCollection('special_openings'), setSpecialOpenings);
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
 
   useEffect(() => {
-    // 極限超時防呆，確保網路太慢時仍能開啟畫面
     const fallbackTimer = setTimeout(() => {
       setIsLoading(false);
     }, 6000);
@@ -612,7 +614,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* 💡 特助修復：全新「日期分組條列式」排版 */}
+            {/* 玩家版：列表模式 */}
             {viewMode === 'list' && (() => {
               const startOfToday = new Date();
               startOfToday.setHours(0, 0, 0, 0);
