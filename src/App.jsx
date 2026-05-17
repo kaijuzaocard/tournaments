@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee } from 'lucide-react';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee } from 'lucide-react';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -24,9 +24,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 💡 特助修復：恢復雙棲自動偵測機制
-// 在預覽環境使用系統分配的 ID，部署到 Vercel 時會自動切換為您的 'kaijuzaocard-main' 讀取真實資料
-const appId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
+// 🔒 特助終極修復：將 appId 完全鎖死，確保正式環境絕對能精準讀取舊資料！
+const appId = 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -164,7 +163,6 @@ export default function App() {
       collection(db, 'artifacts', appId, 'public', 'data', collectionName);
     
     const unsubs = [];
-
     let loadedCount = 0;
     const totalCollections = 7; 
 
@@ -614,13 +612,14 @@ export default function App() {
               </div>
             </div>
 
-            {/* 玩家版：列表模式 */}
+            {/* 💡 終極進化：精品級「日期分組」條列式排版 */}
             {viewMode === 'list' && (() => {
               const startOfToday = new Date();
               startOfToday.setHours(0, 0, 0, 0);
               const next = new Date(startOfToday); 
               next.setDate(next.getDate() + 14);
 
+              // 篩選未來 14 天賽事
               const list = tournaments.filter(t => { 
                 if (!t.date) return false;
                 const parts = t.date.split('-');
@@ -628,6 +627,7 @@ export default function App() {
                 return d >= startOfToday && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); 
               });
               
+              // 篩選未來 14 天店休
               const upcomingClosures = [];
               for (let i = 0; i <= 14; i++) {
                 const checkDate = new Date(startOfToday);
@@ -639,15 +639,19 @@ export default function App() {
                 }
               }
 
-              // 將賽事與店休按日期分組
+              // 將賽事與店休依日期分組
               const grouped = {};
               list.forEach(t => {
-                if (!grouped[t.date]) grouped[t.date] = { isClosure: false, events: [] };
+                if (!grouped[t.date]) grouped[t.date] = { isClosure: false, reason: '', events: [] };
                 grouped[t.date].events.push(t);
               });
               
               upcomingClosures.forEach(c => {
-                grouped[c.date] = { isClosure: true, reason: c.reason, events: [] };
+                if (!grouped[c.date]) grouped[c.date] = { isClosure: true, reason: c.reason, events: [] };
+                else {
+                  grouped[c.date].isClosure = true;
+                  grouped[c.date].reason = c.reason;
+                }
               });
 
               const sortedDates = Object.keys(grouped).sort();
@@ -655,73 +659,99 @@ export default function App() {
               return sortedDates.length === 0 ? (
                 <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div>
               ) : (
-                <div className="flex flex-col gap-5 max-h-[75vh] overflow-y-auto px-1 py-1 hide-scrollbar">
+                <div className="flex flex-col gap-6 max-h-[75vh] overflow-y-auto px-1 py-2 hide-scrollbar pb-10">
                   {sortedDates.map(date => {
                     const dayData = grouped[date];
                     return (
-                      <div key={date} className="bg-white rounded-2xl p-5 md:p-6 shadow-sm border border-gray-200">
-                        <h3 className="text-lg md:text-xl font-black text-orange-800 mb-4 pb-2 border-b-2 border-orange-100 flex items-center gap-2">
-                          <Calendar className="w-5 h-5 text-orange-500"/> {formatEventDate(date)}
-                        </h3>
-                        
-                        {dayData.isClosure ? (
-                          <div className="bg-gray-50 rounded-xl p-5 flex flex-col items-center justify-center text-gray-500 border border-gray-100">
-                            <Coffee className="w-10 h-10 mb-2 opacity-50 text-gray-400" />
-                            <div className="font-black text-lg text-gray-700">{dayData.reason}</div>
-                            <p className="text-sm mt-1 font-bold">這天基地休息喔，別白跑一趟！</p>
+                      <div key={date} className="relative rounded-2xl">
+                        {/* 📅 升級1：吸頂的日期群組標題列 (Sticky Header) */}
+                        <div className="sticky top-0 z-10 bg-gray-100/95 backdrop-blur-sm pb-3 pt-1">
+                          <div className="inline-flex items-center gap-2 bg-orange-600 text-white px-5 py-2 rounded-xl shadow-md font-black tracking-wide">
+                            <Calendar className="w-5 h-5" />
+                            <span className="text-lg">{formatEventDate(date)}</span>
                           </div>
-                        ) : (
-                          <div className="flex flex-col gap-3">
-                            {dayData.events.map(t => (
-                              <div key={t.id} className="bg-gray-50 rounded-xl p-4 border border-gray-100 hover:border-orange-300 transition-colors">
-                                <div className="flex flex-col md:flex-row md:items-center gap-4 justify-between">
-                                  <div className="flex items-start md:items-center gap-4">
-                                    <div className="bg-orange-100 text-orange-700 font-black text-base md:text-lg px-3 py-1.5 rounded-lg shrink-0 text-center shadow-sm w-20">
-                                      {t.time}
-                                    </div>
-                                    <div>
-                                      <div className="mb-1.5"><GameBadge type={t.gameType} /></div>
-                                      <h4 className="font-black text-gray-800 text-lg mb-1">{t.title}</h4>
-                                      <div className="text-sm font-bold text-gray-600 flex items-center gap-1"><Zap className="w-4 h-4 text-yellow-500"/> {t.fee}</div>
-                                    </div>
-                                  </div>
+                        </div>
+                        
+                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                          {/* ☕ 店休狀態排版 */}
+                          {dayData.isClosure ? (
+                            <div className="bg-gray-50 p-8 flex flex-col items-center justify-center text-gray-500">
+                              <Coffee className="w-10 h-10 mb-3 text-gray-400" />
+                              <div className="font-black text-xl text-gray-700">{dayData.reason}</div>
+                              <p className="text-sm mt-1 font-bold">這天基地休息喔，別白跑一趟！</p>
+                            </div>
+                          ) : dayData.events.length === 0 ? null : (
+                            /* ⚔️ 升級2：整列可點擊、精簡 Timeline 質感的賽事排版 */
+                            <div className="divide-y divide-gray-100">
+                              {dayData.events.map(t => {
+                                const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
+                                const isExpanded = expandedNotes[t.id];
 
-                                  {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim())) && (
-                                    <button type="button" onClick={(e) => toggleNote(e, t.id)} className={`w-full md:w-auto text-sm font-bold bg-white px-4 py-2.5 rounded-lg border active:scale-95 transition-all shrink-0 ${expandedNotes[t.id] ? 'text-gray-500 border-gray-200 hover:bg-gray-100' : 'text-orange-600 border-orange-200 hover:bg-orange-50'}`}>
-                                      {expandedNotes[t.id] ? '▲ 收起' : '▼ 詳情'}
-                                    </button>
-                                  )}
-                                </div>
-
-                                {expandedNotes[t.id] && (
-                                  <div className="mt-4 pt-4 border-t border-gray-200 animate-in slide-in-from-top-2 duration-300">
-                                    <ImageCarousel tournament={t} />
-                                    <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-white p-3 rounded-lg border border-gray-100">{renderTextWithLinks(t.description)}</div>
-                                    
-                                    {t.prizeImages && t.prizeImages.length > 0 && (
-                                      <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                        <div className="text-sm font-black text-orange-800 mb-2 flex items-center gap-1.5">
-                                          <Gift className="w-4 h-4 text-orange-500" /> 豪華獎勵一覽
+                                return (
+                                  <div key={t.id} className={`transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:bg-orange-50/50' : ''}`} onClick={(e) => hasDetails && toggleNote(e, t.id)}>
+                                    <div className="p-4 md:p-5 flex flex-col md:flex-row md:items-center gap-4 relative">
+                                      {/* 左側：精緻化的時間方塊 */}
+                                      <div className="flex items-start md:items-center gap-4 flex-1">
+                                        <div className="bg-gradient-to-b from-orange-100 to-orange-50 border border-orange-200 text-orange-700 font-black text-lg md:text-xl px-4 py-2 rounded-xl shrink-0 text-center shadow-sm min-w-[85px]">
+                                          {t.time}
                                         </div>
-                                        <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
-                                          {t.prizeImages.map((img, i) => (
-                                            <img 
-                                              key={`prize-img-${i}`} 
-                                              src={img} 
-                                              alt={`豪華獎品 ${i+1}`} 
-                                              className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                              onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                            />
-                                          ))}
+                                        <div className="flex-1 pr-2">
+                                          <div className="mb-1.5 flex items-center gap-2">
+                                            <GameBadge type={t.gameType} />
+                                            <span className="text-sm font-bold text-gray-500 flex items-center gap-1"><Zap className="w-4 h-4 text-yellow-500"/> {t.fee}</span>
+                                          </div>
+                                          <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
+                                        </div>
+                                      </div>
+
+                                      {/* 右側：升級3 - 簡約動態小箭頭 */}
+                                      {hasDetails && (
+                                        <div className="hidden md:flex shrink-0 items-center justify-center w-10 h-10 rounded-full bg-gray-50 text-gray-400 group-hover:bg-orange-100 group-hover:text-orange-600 transition-colors">
+                                          {isExpanded ? <ChevronUp className="w-6 h-6 text-orange-500" /> : <ChevronDown className="w-6 h-6" />}
+                                        </div>
+                                      )}
+                                      {/* 手機版顯示在下方提示 */}
+                                      {hasDetails && !isExpanded && (
+                                        <div className="md:hidden flex items-center justify-center text-xs font-bold text-gray-400 mt-2 border-t border-dashed border-gray-100 pt-2">
+                                          點擊展開詳情 <ChevronDown className="w-4 h-4 ml-1" />
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* 備註與圖庫展開區 */}
+                                    {isExpanded && (
+                                      <div className="px-4 md:px-5 pb-5 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
+                                        <div className="pt-4 border-t border-gray-100">
+                                          <ImageCarousel tournament={t} />
+                                          <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-white p-4 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
+                                          
+                                          {t.prizeImages && t.prizeImages.length > 0 && (
+                                            <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
+                                              <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
+                                                <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
+                                              </div>
+                                              <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+                                                {t.prizeImages.map((img, i) => (
+                                                  <img 
+                                                    key={`prize-img-${i}`} 
+                                                    src={img} 
+                                                    alt={`豪華獎品 ${i+1}`} 
+                                                    className="w-full h-auto rounded-xl border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                                                    onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                                  />
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
                                     )}
                                   </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -793,50 +823,55 @@ export default function App() {
                     ) : tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).length === 0 ? (
                       <p className="text-sm text-gray-400 font-bold bg-gray-50 p-6 rounded-xl text-center border border-gray-100 border-dashed">這天沒有安排賽事喔！</p>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                      <div className="flex flex-col gap-4">
                         {tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).map(t => (
-                          <div key={t.id} className="p-5 bg-white shadow-md rounded-2xl border-l-4 border-l-orange-500 transition-all hover:-translate-y-1 h-full flex flex-col">
-                            <div className="flex justify-between items-start mb-3">
-                              <div>
-                                <GameBadge type={t.gameType} />
-                                <div className="font-black text-gray-800 mt-3 text-lg md:text-xl">{t.title}</div>
-                                <div className="text-sm text-gray-500 font-bold mt-1.5 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打</div>
-                              </div>
-                            </div>
-                            <div className="text-sm font-bold text-orange-600 bg-orange-50 border border-orange-100 px-3 py-2 rounded-lg shadow-sm mb-3">費用/方案：{t.fee}</div>
-                            
-                            <div className="mt-auto">
-                              {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim())) && (
-                                <div className="mt-2">
-                                  <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-2.5 rounded-xl flex justify-center items-center gap-1 border border-orange-100 transition-colors">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
-                                  {expandedNotes[t.id] && (
-                                    <div className="mt-3 pt-3 border-t border-gray-100">
-                                      <ImageCarousel tournament={t} />
-                                      <div className="text-sm text-gray-600 font-bold whitespace-pre-line leading-relaxed">{renderTextWithLinks(t.description)}</div>
-                                      
-                                      {t.prizeImages && t.prizeImages.length > 0 && (
-                                        <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                          <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                            <Gift className="w-4 h-4 text-orange-500" /> 本場豪華獎勵一覽
-                                          </div>
-                                          <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-                                            {t.prizeImages.map((img, i) => (
-                                              <img 
-                                                key={`prize-img-${i}`} 
-                                                src={img} 
-                                                alt={`豪華獎品 ${i+1}`} 
-                                                className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                                onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                              />
-                                            ))}
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
+                          <div key={t.id} className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm hover:border-orange-300 hover:shadow-md transition-all">
+                            <div className="flex flex-col md:flex-row md:items-center gap-4 justify-between">
+                              <div className="flex items-start md:items-center gap-4 flex-1">
+                                <div className="bg-orange-100 text-orange-700 font-black text-lg md:text-xl px-4 py-2 rounded-xl shrink-0 text-center shadow-inner min-w-[85px]">
+                                  {t.time}
                                 </div>
+                                <div className="flex-1">
+                                  <div className="mb-1.5 flex items-center gap-2">
+                                    <GameBadge type={t.gameType} />
+                                    <span className="text-sm font-bold text-gray-500 flex items-center gap-1"><Zap className="w-4 h-4 text-yellow-500"/> {t.fee}</span>
+                                  </div>
+                                  <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
+                                </div>
+                              </div>
+
+                              {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim())) && (
+                                <button type="button" onClick={(e) => toggleNote(e, t.id)} className={`w-full md:w-auto text-sm font-black px-5 py-3 rounded-xl border active:scale-95 transition-all shrink-0 ${expandedNotes[t.id] ? 'bg-gray-100 text-gray-600 border-gray-200' : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100 hover:shadow-sm'}`}>
+                                  {expandedNotes[t.id] ? '▲ 收起詳情' : '▼ 查看詳情'}
+                                </button>
                               )}
                             </div>
+
+                            {expandedNotes[t.id] && (
+                              <div className="mt-4 pt-4 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
+                                <ImageCarousel tournament={t} />
+                                <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 rounded-xl border border-gray-100">{renderTextWithLinks(t.description)}</div>
+                                
+                                {t.prizeImages && t.prizeImages.length > 0 && (
+                                  <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
+                                    <div className="text-sm font-black text-orange-800 mb-2 flex items-center gap-1.5">
+                                      <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
+                                    </div>
+                                    <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+                                      {t.prizeImages.map((img, i) => (
+                                        <img 
+                                          key={`prize-img-${i}`} 
+                                          src={img} 
+                                          alt={`豪華獎品 ${i+1}`} 
+                                          className="w-full h-auto rounded-xl border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                        />
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
