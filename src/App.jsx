@@ -24,9 +24,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 🔒 特助終極修復：將 appId 完全鎖死，確保正式環境絕對能精準讀取舊資料！
-const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
-const appId = rawAppId.replace(/\//g, '-');
+// 💡 特助修復：採用原生的 appId，搭配外部檔案路徑簡化，完美避開 Firebase 層級解析錯誤！
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -53,6 +52,7 @@ export default function App() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
 
+  // 💡 特助修復：補回正確的狀態追蹤變數，解決畫面崩潰！
   const [collapsedDates, setCollapsedDates] = useState({});
 
   const [adminMonth, setAdminMonth] = useState(new Date());
@@ -269,6 +269,7 @@ export default function App() {
     setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // 💡 特助修復：切換日期的收合狀態
   const toggleDateCollapse = (date) => {
     setCollapsedDates(prev => ({ ...prev, [date]: !prev[date] }));
   };
@@ -522,7 +523,6 @@ export default function App() {
     return dotMap[bgClass] || 'bg-gray-500';
   };
 
-  // 💡 特助 UX 升級：藍圈需求，加入 size 參數，讓標籤在需要的地方更明顯
   const GameBadge = ({ type, size = 'sm' }) => {
     const cat = categories.find(c => c.gameType === type) || { label: type, color: 'bg-gray-200' };
     const sizeClasses = size === 'md' ? 'px-3 py-1 text-[13px] md:text-sm' : 'px-2 py-0.5 text-[11px]';
@@ -605,16 +605,16 @@ export default function App() {
             <div className="flex flex-col gap-3">
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
               
-              {/* 💡 頂級 UX 升級：紅圈需求，分離教學按鈕並放大，強化導流 */}
-              <div className="flex flex-col gap-3 px-1 mb-1">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                  <span className="text-[10px] md:text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg inline-flex items-center shadow-sm w-fit">
-                    💡 標籤可「多選」篩選喔！
-                  </span>
-                  <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-sm md:text-base font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all">
-                    🎓 點我快速預約【新手教學】 👉
-                  </button>
-                </div>
+              <div className="flex flex-wrap gap-2 px-1">
+                <span className="text-[10px] md:text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg inline-flex items-center shadow-sm w-fit">
+                  💡 標籤可「多選」篩選喔！
+                </span>
+              </div>
+              
+              <div className="px-1 mb-1">
+                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all">
+                  🎓 點我快速預約【新手教學】 👉
+                </button>
               </div>
 
               <div className="flex items-center gap-1 w-full">
@@ -628,7 +628,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 列表模式：包含收合、標籤放大與單行店休 */}
             {viewMode === 'list' && (() => {
               const startOfToday = new Date();
               startOfToday.setHours(0, 0, 0, 0);
@@ -673,12 +672,11 @@ export default function App() {
                 <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div>
               ) : (
                 <div className="flex flex-col gap-6 px-1 py-2 pb-10">
-                  {sortedDates.map(date => {
+                  {sortedDates.map((date, index) => {
                     const dayData = grouped[date];
-                    const isCollapsed = collapsedDates[date];
+                    const isCollapsed = collapsedDates[date] !== undefined ? collapsedDates[date] : (index !== 0 || dayData.isClosure);
                     const dayGameTypes = [...new Set(dayData.events.map(e => e.gameType))];
 
-                    // 💡 黃圈升級：如果是店休，直接用單行橫幅顯示，乾淨俐落！
                     if (dayData.isClosure) {
                       return (
                         <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-gray-100 overflow-hidden opacity-90 flex items-center justify-between px-4 md:px-6 py-4">
@@ -693,11 +691,9 @@ export default function App() {
                       );
                     }
 
-                    // 正常的賽事日排版
                     return (
                       <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-white overflow-hidden transition-all duration-300">
                         
-                        {/* 📅 可點擊收合的日期群組標題列 */}
                         <div 
                           className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-200 px-4 md:px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors group"
                           onClick={() => toggleDateCollapse(date)}
@@ -708,7 +704,6 @@ export default function App() {
                               <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
                             </div>
                             
-                            {/* 💡 藍圈升級：當日賽事標籤預覽放大版 */}
                             {dayGameTypes.length > 0 && (
                               <div className="flex items-center gap-1.5 ml-0 md:ml-3">
                                 {dayGameTypes.map(type => <GameBadge key={type} type={type} size="md" />)}
@@ -721,7 +716,6 @@ export default function App() {
                           </div>
                         </div>
                         
-                        {/* 內容區塊 (受收合狀態控制) */}
                         {!isCollapsed && (
                           <div className="p-4 md:p-5 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
                             <div className="flex flex-col gap-3">
@@ -744,9 +738,9 @@ export default function App() {
                                       <div className="hidden md:block w-1 h-10 bg-gray-100 rounded-full shrink-0"></div>
                                       
                                       <div className="flex-1 min-w-0 py-1">
-                                        <div className="flex items-center flex-wrap gap-1.5 mb-1">
+                                        <div className="flex items-center flex-wrap gap-1.5 mb-1.5">
                                           <GameBadge type={t.gameType} />
-                                          <span className="text-[11px] font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
+                                          <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
                                         </div>
                                         <h4 className="font-black text-gray-800 text-lg md:text-xl leading-snug break-words pr-2">{t.title}</h4>
                                       </div>
@@ -775,7 +769,7 @@ export default function App() {
                                           {t.prizeImages && t.prizeImages.length > 0 && (
                                             <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
                                               <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                                <Gift className="w-4 h-4 text-orange-500" /> 豪華獎勵一覽
+                                                <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
                                               </div>
                                               <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
                                                 {t.prizeImages.map((img, i) => (
@@ -881,7 +875,7 @@ export default function App() {
                                 <div className="flex-1">
                                   <div className="mb-1.5 flex items-center gap-2">
                                     <GameBadge type={t.gameType} />
-                                    <span className="text-sm font-bold text-gray-500 flex items-center gap-1"><Zap className="w-4 h-4 text-yellow-500"/> {t.fee}</span>
+                                    <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
                                   </div>
                                   <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
                                 </div>
@@ -901,7 +895,7 @@ export default function App() {
                                 
                                 {t.prizeImages && t.prizeImages.length > 0 && (
                                   <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                    <div className="text-sm font-black text-orange-800 mb-2 flex items-center gap-1.5">
+                                    <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
                                       <Gift className="w-4 h-4 text-orange-500" /> 豪華獎勵一覽
                                     </div>
                                     <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
