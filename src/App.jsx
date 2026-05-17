@@ -25,9 +25,9 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 💡 特助修復：精準擷取基底 appId，避免在測試環境中發生權限錯誤，且確保正式環境可無縫接軌！
-const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
-const appId = rawAppId.split('/')[0];
+// 💡 取得系統分配的 appId，並強制替換所有斜線為連字號，確保 Firebase 集合路徑層級數量正確
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const appId = String(rawAppId).replace(/\//g, '-');
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -67,6 +67,7 @@ export default function App() {
   const [specialOpenings, setSpecialOpenings] = useState([]); 
   const [closureReason, setClosureReason] = useState(''); 
   
+  // 批量店休狀態
   const [batchStartDate, setBatchStartDate] = useState('');
   const [batchEndDate, setBatchEndDate] = useState('');
   const [batchReason, setBatchReason] = useState('');
@@ -161,34 +162,36 @@ export default function App() {
     
     const unsubs = [];
 
-    let loadedCount = 0;
-    const totalCollections = 7; 
+    // 💡 特助修復：精準的 Loading 載入控制，確保不被空快取給騙了！
+    let loadedFlags = {
+      t: false, c: false, np: false, tr: false, tb: false, sc: false, so: false
+    };
 
     const checkAllLoaded = () => {
-      loadedCount++;
-      if (loadedCount >= totalCollections) {
-        setIsLoading(false);
+      if (Object.values(loadedFlags).every(v => v === true)) {
+        setTimeout(() => setIsLoading(false), 200); // 稍微給 React 200ms 的繪製時間，確保畫面不閃爍
       }
     };
 
-    const setupListener = (colRef, setter, sortFn = null) => {
-      let isServerDataLoaded = false;
-      
+    const setupListener = (colRef, flagKey, setter, sortFn = null) => {
       const unsub = onSnapshot(colRef, { includeMetadataChanges: true },
         (snapshot) => {
           let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           if (sortFn) data = sortFn(data);
           setter(data);
           
-          if (!isServerDataLoaded && !snapshot.metadata.fromCache) {
-            isServerDataLoaded = true;
-            checkAllLoaded();
+          if (!loadedFlags[flagKey]) {
+            // 💡 如果是從伺服器抓到的，或者快取裡面確實「有資料」，才算真的載入完畢
+            if (!snapshot.metadata.fromCache || data.length > 0) {
+              loadedFlags[flagKey] = true;
+              checkAllLoaded();
+            }
           }
         }, 
         (err) => {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
-          if (!isServerDataLoaded) {
-            isServerDataLoaded = true;
+          if (!loadedFlags[flagKey]) {
+            loadedFlags[flagKey] = true;
             checkAllLoaded(); 
           }
         }
@@ -196,34 +199,35 @@ export default function App() {
       unsubs.push(unsub);
     };
 
-    setupListener(getCollection('monster_tournaments'), setTournaments, (data) => 
+    setupListener(getCollection('monster_tournaments'), 't', setTournaments, (data) => 
       data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`))
     );
 
-    setupListener(getCollection('game_categories'), (data) => {
+    setupListener(getCollection('game_categories'), 'c', (data) => {
       setCategories(data);
       if (data.length > 0 && !reserveForm.gameType) {
         setReserveForm(prev => ({ ...prev, gameType: data[0].gameType }));
       }
     });
 
-    setupListener(getCollection('note_presets'), setNotePresets);
+    setupListener(getCollection('note_presets'), 'np', setNotePresets);
 
-    setupListener(getCollection('tutorial_reservations'), setReservations, (data) =>
+    setupListener(getCollection('tutorial_reservations'), 'tr', setReservations, (data) =>
       data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     );
 
-    setupListener(getCollection('tutorial_banners'), setTutorialBanners, (data) =>
+    setupListener(getCollection('tutorial_banners'), 'tb', setTutorialBanners, (data) =>
       data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     );
 
-    setupListener(getCollection('store_closures'), setClosures); 
-    setupListener(getCollection('special_openings'), setSpecialOpenings);
+    setupListener(getCollection('store_closures'), 'sc', setClosures); 
+    setupListener(getCollection('special_openings'), 'so', setSpecialOpenings);
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
 
   useEffect(() => {
+    // 極限超時防呆，確保網路太慢時仍能開啟畫面
     const fallbackTimer = setTimeout(() => {
       setIsLoading(false);
     }, 6000);
@@ -608,7 +612,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* 玩家版：列表模式 */}
+            {/* 💡 特助修復：全新「日期分組條列式」排版 */}
             {viewMode === 'list' && (() => {
               const startOfToday = new Date();
               startOfToday.setHours(0, 0, 0, 0);
@@ -629,73 +633,96 @@ export default function App() {
                 const ds = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
                 const cObj = getClosureObj(ds);
                 if (cObj) {
-                  upcomingClosures.push({ ...cObj, date: ds, id: cObj.id || `default-closure-${ds}`, isClosure: true });
+                  upcomingClosures.push({ date: ds, reason: cObj.reason, isClosure: true });
                 }
               }
 
-              const combinedList = [...list, ...upcomingClosures].sort((a, b) => {
-                const dateA = new Date(a.date.split('-')[0], a.date.split('-')[1] - 1, a.date.split('-')[2]);
-                const dateB = new Date(b.date.split('-')[0], b.date.split('-')[1] - 1, b.date.split('-')[2]);
-                if (dateA.getTime() === dateB.getTime() && a.time && b.time) {
-                  return a.time.localeCompare(b.time);
-                }
-                return dateA - dateB;
+              // 將賽事與店休按日期分組
+              const grouped = {};
+              list.forEach(t => {
+                if (!grouped[t.date]) grouped[t.date] = { isClosure: false, events: [] };
+                grouped[t.date].events.push(t);
+              });
+              
+              upcomingClosures.forEach(c => {
+                grouped[c.date] = { isClosure: true, reason: c.reason, events: [] };
               });
 
-              return combinedList.length === 0 ? <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div> : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 max-h-[75vh] overflow-y-auto px-2 py-2 hide-scrollbar">
-                  {combinedList.map(t => (
-                    t.isClosure ? (
-                      <div key={t.id} className="bg-gray-100 rounded-2xl p-5 shadow-sm border-l-4 border-gray-400 flex flex-col h-full justify-center items-center text-center opacity-80 min-h-[220px]">
-                        <Coffee className="w-12 h-12 text-gray-500 mb-3" />
-                        <div className="text-gray-500 font-black text-lg mb-2">{formatEventDate(t.date)}</div>
-                        <h3 className="text-xl font-black text-gray-800">{t.reason}</h3>
-                        <p className="text-sm font-bold text-gray-500 mt-2">這天基地休息喔，別白跑一趟！</p>
-                      </div>
-                    ) : (
-                    <div key={t.id} className="bg-white rounded-2xl p-5 shadow-md border-l-4 border-orange-500 transition-all hover:-translate-y-2 hover:shadow-lg flex flex-col h-full">
-                      <div className="flex justify-between items-start mb-3">
-                        <GameBadge type={t.gameType} />
-                        <div className="text-right"><div className="text-orange-600 font-black text-lg">{formatEventDate(t.date)}</div><div className="text-gray-500 text-sm font-bold">{t.time} 開打</div></div>
-                      </div>
-                      <h3 className="text-lg md:text-xl font-black text-gray-800 mb-2">{t.title}</h3>
-                      <div className="flex items-center gap-2 text-sm text-gray-600 mb-4 bg-gray-50 p-3 rounded-lg border border-gray-100"><Zap className="w-5 h-5 text-yellow-500 flex-shrink-0" /><span className="font-bold">費用/方案：{t.fee}</span></div>
-                      
-                      <div className="mt-auto">
-                        {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim())) && (
-                          <div className="mt-2">
-                            <button type="button" onClick={(e) => toggleNote(e, t.id)} className="w-full text-sm font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 py-3 rounded-xl flex justify-center items-center gap-1 border border-orange-100 active:scale-95 transition-all">{expandedNotes[t.id] ? '▲ 收起詳細資訊' : '▼ 查看詳細資訊'}</button>
-                            {expandedNotes[t.id] && (
-                              <div className="mt-3 pt-3 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
-                                <ImageCarousel tournament={t} />
-                                <div className="text-sm text-gray-600 whitespace-pre-line font-bold leading-relaxed">{renderTextWithLinks(t.description)}</div>
-                                
-                                {t.prizeImages && t.prizeImages.length > 0 && (
-                                  <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                    <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                      <Gift className="w-4 h-4 text-orange-500" /> 本場豪華獎勵一覽
+              const sortedDates = Object.keys(grouped).sort();
+
+              return sortedDates.length === 0 ? (
+                <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div>
+              ) : (
+                <div className="flex flex-col gap-5 max-h-[75vh] overflow-y-auto px-1 py-1 hide-scrollbar">
+                  {sortedDates.map(date => {
+                    const dayData = grouped[date];
+                    return (
+                      <div key={date} className="bg-white rounded-2xl p-5 md:p-6 shadow-sm border border-gray-200">
+                        <h3 className="text-lg md:text-xl font-black text-orange-800 mb-4 pb-2 border-b-2 border-orange-100 flex items-center gap-2">
+                          <Calendar className="w-5 h-5 text-orange-500"/> {formatEventDate(date)}
+                        </h3>
+                        
+                        {dayData.isClosure ? (
+                          <div className="bg-gray-50 rounded-xl p-5 flex flex-col items-center justify-center text-gray-500 border border-gray-100">
+                            <Coffee className="w-10 h-10 mb-2 opacity-50 text-gray-400" />
+                            <div className="font-black text-lg text-gray-700">{dayData.reason}</div>
+                            <p className="text-sm mt-1 font-bold">這天基地休息喔，別白跑一趟！</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3">
+                            {dayData.events.map(t => (
+                              <div key={t.id} className="bg-gray-50 rounded-xl p-4 border border-gray-100 hover:border-orange-300 transition-colors">
+                                <div className="flex flex-col md:flex-row md:items-center gap-4 justify-between">
+                                  <div className="flex items-start md:items-center gap-4">
+                                    <div className="bg-orange-100 text-orange-700 font-black text-base md:text-lg px-3 py-1.5 rounded-lg shrink-0 text-center shadow-sm w-20">
+                                      {t.time}
                                     </div>
-                                    <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-                                      {t.prizeImages.map((img, i) => (
-                                        <img 
-                                          key={`prize-img-${i}`} 
-                                          src={img} 
-                                          alt={`豪華獎品 ${i+1}`} 
-                                          className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                        />
-                                      ))}
+                                    <div>
+                                      <div className="mb-1.5"><GameBadge type={t.gameType} /></div>
+                                      <h4 className="font-black text-gray-800 text-lg mb-1">{t.title}</h4>
+                                      <div className="text-sm font-bold text-gray-600 flex items-center gap-1"><Zap className="w-4 h-4 text-yellow-500"/> {t.fee}</div>
                                     </div>
+                                  </div>
+
+                                  {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim())) && (
+                                    <button type="button" onClick={(e) => toggleNote(e, t.id)} className={`w-full md:w-auto text-sm font-bold bg-white px-4 py-2.5 rounded-lg border active:scale-95 transition-all shrink-0 ${expandedNotes[t.id] ? 'text-gray-500 border-gray-200 hover:bg-gray-100' : 'text-orange-600 border-orange-200 hover:bg-orange-50'}`}>
+                                      {expandedNotes[t.id] ? '▲ 收起' : '▼ 詳情'}
+                                    </button>
+                                  )}
+                                </div>
+
+                                {expandedNotes[t.id] && (
+                                  <div className="mt-4 pt-4 border-t border-gray-200 animate-in slide-in-from-top-2 duration-300">
+                                    <ImageCarousel tournament={t} />
+                                    <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-white p-3 rounded-lg border border-gray-100">{renderTextWithLinks(t.description)}</div>
+                                    
+                                    {t.prizeImages && t.prizeImages.length > 0 && (
+                                      <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
+                                        <div className="text-sm font-black text-orange-800 mb-2 flex items-center gap-1.5">
+                                          <Gift className="w-4 h-4 text-orange-500" /> 豪華獎勵一覽
+                                        </div>
+                                        <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+                                          {t.prizeImages.map((img, i) => (
+                                            <img 
+                                              key={`prize-img-${i}`} 
+                                              src={img} 
+                                              alt={`豪華獎品 ${i+1}`} 
+                                              className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
+                                              onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
+                                            />
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
-                            )}
+                            ))}
                           </div>
                         )}
                       </div>
-                    </div>
-                    )
-                  ))}
+                    );
+                  })}
                 </div>
               );
             })()}
