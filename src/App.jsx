@@ -517,7 +517,7 @@ export default function App() {
 
   const GameBadge = ({ type }) => {
     const cat = categories.find(c => c.gameType === type) || { label: type, color: 'bg-gray-200' };
-    return <span className={`px-2 py-1 text-xs font-black rounded-full text-black shadow-sm ${cat.color}`}>{cat.label}</span>;
+    return <span className={`px-2 py-1 text-[11px] font-black rounded-full text-black shadow-sm ${cat.color}`}>{cat.label}</span>;
   };
 
   const ImageCarousel = ({ tournament }) => {
@@ -663,57 +663,74 @@ export default function App() {
                   {sortedDates.map(date => {
                     const dayData = grouped[date];
                     return (
-                      <div key={date} className="relative rounded-2xl">
-                        {/* 📅 升級1：吸頂的日期群組標題列 (Sticky Header) */}
-                        <div className="sticky top-0 z-10 bg-gray-100/95 backdrop-blur-sm pb-3 pt-1">
-                          <div className="inline-flex items-center gap-2 bg-orange-600 text-white px-5 py-2 rounded-xl shadow-md font-black tracking-wide">
-                            <Calendar className="w-5 h-5" />
-                            <span className="text-lg">{formatEventDate(date)}</span>
-                          </div>
+                      <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-white overflow-hidden">
+                        {/* 📅 吸頂的日期群組標題列 */}
+                        <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 px-5 py-3 flex items-center gap-2">
+                          <Calendar className="w-5 h-5 text-orange-600" />
+                          <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
                         </div>
                         
-                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div className="p-4 md:p-5 flex flex-col gap-3">
                           {/* ☕ 店休狀態排版 */}
                           {dayData.isClosure ? (
-                            <div className="bg-gray-50 p-8 flex flex-col items-center justify-center text-gray-500">
-                              <Coffee className="w-10 h-10 mb-3 text-gray-400" />
+                            <div className="bg-gray-50/80 rounded-xl p-8 flex flex-col items-center justify-center text-gray-500 border border-gray-200 border-dashed">
+                              <Coffee className="w-12 h-12 mb-3 text-gray-400" />
                               <div className="font-black text-xl text-gray-700">{dayData.reason}</div>
-                              <p className="text-sm mt-1 font-bold">這天基地休息喔，別白跑一趟！</p>
+                              <p className="text-sm mt-2 font-bold">這天基地休息喔，別白跑一趟！</p>
                             </div>
                           ) : dayData.events.length === 0 ? null : (
-                            /* ⚔️ 升級2：整列可點擊、精簡 Timeline 質感的賽事排版 */
-                            <div className="divide-y divide-gray-100">
+                            /* ⚔️ 精品級的賽事排版 */
+                            <div className="flex flex-col gap-3">
                               {dayData.events.map(t => {
                                 const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
                                 const isExpanded = expandedNotes[t.id];
 
                                 return (
-                                  <div key={t.id} className={`transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:bg-orange-50/50' : ''}`} onClick={(e) => hasDetails && toggleNote(e, t.id)}>
+                                  <div 
+                                    key={t.id} 
+                                    className={`group rounded-xl border border-gray-200 bg-white transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:border-orange-400 hover:shadow-md' : ''}`} 
+                                    onClick={(e) => hasDetails && toggleNote(e, t.id)}
+                                  >
                                     <div className="p-4 md:p-5 flex flex-col md:flex-row md:items-center gap-4 relative">
-                                      {/* 左側：精緻化的時間方塊 */}
-                                      <div className="flex items-start md:items-center gap-4 flex-1">
+                                      
+                                      {/* 左側：時間軸方塊 */}
+                                      <div className="flex items-start md:items-center gap-4 flex-1 w-full">
                                         <div className="bg-gradient-to-b from-orange-100 to-orange-50 border border-orange-200 text-orange-700 font-black text-lg md:text-xl px-4 py-2 rounded-xl shrink-0 text-center shadow-sm min-w-[85px]">
                                           {t.time}
                                         </div>
+                                        
+                                        {/* 中間：賽事資訊主客歸位 */}
                                         <div className="flex-1 pr-2">
-                                          <div className="mb-1.5 flex items-center gap-2">
+                                          <div className="flex items-center flex-wrap gap-2 mb-1.5">
+                                            <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
                                             <GameBadge type={t.gameType} />
-                                            <span className="text-sm font-bold text-gray-500 flex items-center gap-1"><Zap className="w-4 h-4 text-yellow-500"/> {t.fee}</span>
                                           </div>
-                                          <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
+                                          {/* 費用標籤化，更吸睛 */}
+                                          <div className="inline-flex items-center gap-1.5 text-sm font-bold text-gray-600 bg-gray-100/80 px-2.5 py-1 rounded-md">
+                                            <Zap className="w-4 h-4 text-yellow-500"/> 方案：{t.fee}
+                                          </div>
                                         </div>
                                       </div>
 
-                                      {/* 右側：升級3 - 簡約動態小箭頭 */}
+                                      {/* 右側：展開引導按鈕 (桌面版) */}
                                       {hasDetails && (
-                                        <div className="hidden md:flex shrink-0 items-center justify-center w-10 h-10 rounded-full bg-gray-50 text-gray-400 group-hover:bg-orange-100 group-hover:text-orange-600 transition-colors">
-                                          {isExpanded ? <ChevronUp className="w-6 h-6 text-orange-500" /> : <ChevronDown className="w-6 h-6" />}
+                                        <div className="hidden md:flex shrink-0 flex-col items-center justify-center gap-1 opacity-50 group-hover:opacity-100 transition-opacity min-w-[60px]">
+                                          <div className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${isExpanded ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-500 group-hover:bg-orange-50 group-hover:text-orange-500'}`}>
+                                            {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                                          </div>
+                                          <span className={`text-[10px] font-black ${isExpanded ? 'text-orange-600' : 'text-gray-400 group-hover:text-orange-500'}`}>{isExpanded ? '收起' : '詳情'}</span>
                                         </div>
                                       )}
-                                      {/* 手機版顯示在下方提示 */}
+
+                                      {/* 下方：展開引導提示 (手機版) */}
                                       {hasDetails && !isExpanded && (
-                                        <div className="md:hidden flex items-center justify-center text-xs font-bold text-gray-400 mt-2 border-t border-dashed border-gray-100 pt-2">
-                                          點擊展開詳情 <ChevronDown className="w-4 h-4 ml-1" />
+                                        <div className="md:hidden flex items-center justify-center text-[11px] font-bold text-gray-400 mt-1 border-t border-dashed border-gray-100 pt-3 group-hover:text-orange-500 transition-colors">
+                                          👆 點擊卡片查看賽制與獎勵 <ChevronDown className="w-3 h-3 ml-1" />
+                                        </div>
+                                      )}
+                                      {hasDetails && isExpanded && (
+                                        <div className="md:hidden flex items-center justify-center text-[11px] font-bold text-orange-500 mt-1 border-t border-dashed border-gray-100 pt-3 transition-colors">
+                                          收起詳情 <ChevronUp className="w-3 h-3 ml-1" />
                                         </div>
                                       )}
                                     </div>
@@ -723,7 +740,7 @@ export default function App() {
                                       <div className="px-4 md:px-5 pb-5 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
                                         <div className="pt-4 border-t border-gray-100">
                                           <ImageCarousel tournament={t} />
-                                          <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-white p-4 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
+                                          <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
                                           
                                           {t.prizeImages && t.prizeImages.length > 0 && (
                                             <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
