@@ -25,8 +25,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 確保路徑中不包含會破壞 Firestore 結構的特殊字元
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
+// 💡 取得系統分配的 appId，並強制替換所有斜線為連字號，確保 Firebase 集合路徑層級數量正確
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const appId = String(rawAppId).replace(/\//g, '-');
 
 export default function App() {
@@ -144,14 +144,12 @@ export default function App() {
         }
       } catch (error) {
         console.error("Firebase 驗證失敗", error);
-        setIsLoading(false); // 只有在真的大斷線失敗時，才解除 Loading
+        setIsLoading(false); 
       }
     };
     initAuth();
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      // 💡 特助修復核心：刪除了原本會「提早關閉 Loading 動畫」的錯誤防呆邏輯！
-      // 統一交給下方的 7 個資料庫小精靈來決定什麼時候關閉動畫。
     });
     return () => unsubscribeAuth();
   }, []);
@@ -164,9 +162,8 @@ export default function App() {
     
     const unsubs = [];
 
-    // 💡 特助修復：新增載入計數器，確保所有資料都抓完才關閉 Loading 畫面
     let loadedCount = 0;
-    const totalCollections = 7; // 我們目前監聽了 7 個資料表
+    const totalCollections = 7; 
 
     const checkAllLoaded = () => {
       loadedCount++;
@@ -183,7 +180,6 @@ export default function App() {
           if (sortFn) data = sortFn(data);
           setter(data);
           
-          // 💡 只有第一次載入時觸發計數，後續即時更新不影響 Loading 狀態
           if (isFirstLoad) {
             isFirstLoad = false;
             checkAllLoaded();
@@ -193,7 +189,7 @@ export default function App() {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
           if (isFirstLoad) {
             isFirstLoad = false;
-            checkAllLoaded(); // 就算發生錯誤也要推進計數，避免畫面卡死在動畫
+            checkAllLoaded(); 
           }
         }
       );
@@ -228,7 +224,6 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    // 💡 放寬備用防呆計時器：從 4 秒延長到 6 秒，給雲端資料庫多一點點時間抓取全部內容
     const fallbackTimer = setTimeout(() => {
       setIsLoading(false);
     }, 6000);
@@ -489,7 +484,6 @@ export default function App() {
     }
   };
 
-  // 💡 安全的日期格式化與防時區轉換
   const formatEventDate = (dateString) => {
     if (!dateString) return '';
     if (typeof dateString !== 'string') return String(dateString);
@@ -614,9 +608,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* 💡 修復：玩家版列表模式 (解決時間隱藏問題) */}
+            {/* 玩家版：列表模式 */}
             {viewMode === 'list' && (() => {
-              // 取得今天的凌晨 00:00:00，確保今天的賽事整天都會顯示
               const startOfToday = new Date();
               startOfToday.setHours(0, 0, 0, 0);
               const next = new Date(startOfToday); 
@@ -707,7 +700,7 @@ export default function App() {
               );
             })()}
 
-            {/* 玩家版：圓點點行事曆 */}
+            {/* 玩家版：行事曆 */}
             {viewMode === 'calendar' && (
               <div className="bg-white rounded-2xl p-5 md:p-8 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-6">
@@ -1027,7 +1020,6 @@ export default function App() {
 
                   {/* 右側一欄：分類管理與教學管理 */}
                   <div className="space-y-6">
-                    {/* 遊戲分類管理 */}
                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                       <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Tags className="w-6 h-6 text-orange-500" /> 標籤管理</h2>
                       <div className="flex flex-wrap gap-2 mb-5">
@@ -1048,7 +1040,6 @@ export default function App() {
                       </form>
                     </div>
 
-                    {/* 教學圖管理 */}
                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
                       <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 福利圖管理</h2>
                       <div className="grid grid-cols-2 gap-3 mb-5">
