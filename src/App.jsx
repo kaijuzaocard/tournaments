@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee } from 'lucide-react';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info } from 'lucide-react';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -24,8 +24,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 💡 特助修復：採用原生的 appId，搭配外部檔案路徑簡化，完美避開 Firebase 層級解析錯誤！
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'kaijuzaocard-main';
+// 🔒 特助終極修復：將 appId 完全鎖死，確保正式環境絕對能精準讀取舊資料！
+const appId = 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -52,7 +52,6 @@ export default function App() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
 
-  // 💡 特助修復：補回正確的狀態追蹤變數，解決畫面崩潰！
   const [collapsedDates, setCollapsedDates] = useState({});
 
   const [adminMonth, setAdminMonth] = useState(new Date());
@@ -269,7 +268,6 @@ export default function App() {
     setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // 💡 特助修復：切換日期的收合狀態
   const toggleDateCollapse = (date) => {
     setCollapsedDates(prev => ({ ...prev, [date]: !prev[date] }));
   };
@@ -523,10 +521,11 @@ export default function App() {
     return dotMap[bgClass] || 'bg-gray-500';
   };
 
+  // 💡 特助 UX 升級：根據需求動態設定標籤大小，讓不同裝置都能完美呈現
   const GameBadge = ({ type, size = 'sm' }) => {
     const cat = categories.find(c => c.gameType === type) || { label: type, color: 'bg-gray-200' };
-    const sizeClasses = size === 'md' ? 'px-3 py-1 text-[13px] md:text-sm' : 'px-2 py-0.5 text-[11px]';
-    return <span className={`${sizeClasses} font-black rounded text-black shadow-sm ${cat.color} shrink-0`}>{cat.label}</span>;
+    const sizeClasses = size === 'md' ? 'px-3 py-1.5 text-sm md:text-base shadow-sm border border-black/5' : 'px-2 py-0.5 text-xs';
+    return <span className={`${sizeClasses} font-black rounded-lg text-black ${cat.color} shrink-0`}>{cat.label}</span>;
   };
 
   const ImageCarousel = ({ tournament }) => {
@@ -534,7 +533,7 @@ export default function App() {
     const idx = currentImgIdx[tournament.id] || 0; if (imgs.length === 0) return null;
     const safeIdx = idx % imgs.length;
     return (
-      <div className="mb-3 relative rounded-lg overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
+      <div className="mb-3 relative rounded-xl overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
         <img src={imgs[safeIdx]} alt="主視覺" className="w-full h-auto object-cover cursor-zoom-in" onClick={(e) => { e.stopPropagation(); setFullscreenImage(imgs[safeIdx]); }} />
         {imgs.length > 1 && (
           <><button onClick={(e) => { e.stopPropagation(); setCurrentImgIdx(p => ({...p, [tournament.id]: (safeIdx-1+imgs.length)%imgs.length})); }} className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full shadow-sm"><ChevronLeft className="w-5 h-5" /></button><button onClick={(e) => { e.stopPropagation(); setCurrentImgIdx(p => ({...p, [tournament.id]: (safeIdx+1)%imgs.length})); }} className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full shadow-sm"><ChevronRight className="w-5 h-5" /></button><div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">{imgs.map((_, i) => <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all ${i === safeIdx ? 'bg-white scale-125 shadow-md' : 'bg-white/50'}`} />)}</div></>
@@ -605,19 +604,20 @@ export default function App() {
             <div className="flex flex-col gap-3">
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
               
-              <div className="flex flex-wrap gap-2 px-1">
-                <span className="text-[10px] md:text-xs font-bold text-orange-600 bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg inline-flex items-center shadow-sm w-fit">
-                  💡 標籤可「多選」篩選喔！
-                </span>
-              </div>
-              
-              <div className="px-1 mb-1">
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all">
+              {/* 💡 RWD 頂級 UX 升級：藍圈需求，將提示條改為自適應的全版面動態設計！ */}
+              <div className="flex flex-col md:flex-row gap-3 px-1 mb-1 items-start md:items-center justify-between">
+                <div className="w-full md:w-auto text-xs md:text-sm font-black text-orange-700 bg-gradient-to-r from-orange-100 to-orange-50 border border-orange-200 px-4 py-2 rounded-xl flex items-center justify-center md:justify-start shadow-sm animate-[pulse_3s_ease-in-out_infinite]">
+                  <Info className="w-4 h-4 mr-1.5 shrink-0 text-orange-500" />
+                  點擊下方標籤，可「多選」篩選想看的遊戲喔！
+                </div>
+
+                {/* 🔴 紅圈大升級：將新手教學按鈕獨立放大，設計成醒目的漸層寬版按鈕 */}
+                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink-0">
                   🎓 點我快速預約【新手教學】 👉
                 </button>
               </div>
 
-              <div className="flex items-center gap-1 w-full">
+              <div className="flex items-center gap-1 w-full mt-1">
                 <button onClick={() => categoryScrollRef.current?.scrollBy({ left: -200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 md:w-12 md:h-12 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center hover:bg-orange-50 active:scale-95 transition-all"><ChevronLeft className="w-5 h-5 md:w-6 md:h-6 -ml-0.5" /></button>
                 <div ref={categoryScrollRef} className="flex-1 flex gap-2 overflow-x-auto pb-2 pt-1 px-1 hide-scrollbar scroll-smooth">
                   {[{ id: 'All', label: '全部', color: 'bg-white border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color }))].map(cat => (
@@ -677,48 +677,58 @@ export default function App() {
                     const isCollapsed = collapsedDates[date] !== undefined ? collapsedDates[date] : (index !== 0 || dayData.isClosure);
                     const dayGameTypes = [...new Set(dayData.events.map(e => e.gameType))];
 
+                    // 🟡 黃圈升級：如果是店休，直接呈現單行橫幅，拔除收合箭頭功能
                     if (dayData.isClosure) {
                       return (
-                        <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-gray-100 overflow-hidden opacity-90 flex items-center justify-between px-4 md:px-6 py-4">
+                        <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-gray-100 overflow-hidden opacity-90 flex items-center justify-between px-5 py-4 md:px-6 md:py-5">
                           <div className="flex items-center gap-3">
-                            <Calendar className="w-5 h-5 text-gray-400" />
-                            <span className="font-black text-gray-500 text-lg md:text-xl tracking-wide line-through decoration-gray-400">{formatEventDate(date)}</span>
+                            <Calendar className="w-5 h-5 md:w-6 md:h-6 text-gray-400 shrink-0" />
+                            <span className="font-black text-gray-500 text-lg md:text-xl tracking-wide line-through decoration-gray-400 shrink-0">{formatEventDate(date)}</span>
                           </div>
-                          <div className="bg-gray-200/80 text-gray-600 font-black px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm shadow-inner shrink-0">
-                            <Coffee className="w-4 h-4" /> {dayData.reason}
+                          <div className="bg-gray-200/80 text-gray-600 font-black px-3 md:px-4 py-1.5 md:py-2 rounded-lg flex items-center justify-end gap-2 text-sm md:text-base shadow-inner min-w-0">
+                            <Coffee className="w-4 h-4 md:w-5 md:h-5 shrink-0" /> 
+                            <span className="truncate">{dayData.reason}</span>
                           </div>
                         </div>
                       );
                     }
 
+                    // 正常的賽事日排版
                     return (
                       <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-white overflow-hidden transition-all duration-300">
                         
+                        {/* 📅 可點擊收合的日期群組標題列 */}
                         <div 
-                          className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-200 px-4 md:px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors group"
+                          className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-200 px-4 md:px-6 py-4 md:py-5 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors group"
                           onClick={() => toggleDateCollapse(date)}
                         >
-                          <div className="flex items-center gap-3 flex-wrap">
+                          <div className="flex items-center gap-3 flex-wrap flex-1 min-w-0 pr-2">
                             <div className="flex items-center gap-2 shrink-0">
-                              <Calendar className="w-5 h-5 text-orange-600 group-hover:scale-110 transition-transform" />
+                              <Calendar className="w-5 h-5 md:w-6 md:h-6 text-orange-600 group-hover:scale-110 transition-transform" />
                               <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
                             </div>
                             
+                            {/* 🔵 藍圈升級：當日賽事標籤預覽放大版 */}
                             {dayGameTypes.length > 0 && (
-                              <div className="flex items-center gap-1.5 ml-0 md:ml-3">
+                              <div className="flex items-center flex-wrap gap-1.5 md:gap-2 ml-0 sm:ml-3">
                                 {dayGameTypes.map(type => <GameBadge key={type} type={type} size="md" />)}
                               </div>
                             )}
                           </div>
 
-                          <div className={`p-1 rounded-full text-gray-400 group-hover:bg-gray-200 group-hover:text-orange-600 transition-all shrink-0 ml-2 ${isCollapsed ? '' : 'rotate-180'}`}>
-                            <ChevronDown className="w-5 h-5" />
+                          {/* 💡 終級修復：按鈕「文字化」並加強觸控區域，解決不知道可以按的問題 */}
+                          <div className={`flex items-center gap-1.5 md:gap-2 bg-white border border-gray-200 px-3 py-1.5 md:px-4 md:py-2 rounded-full shadow-sm group-hover:border-orange-300 group-hover:bg-orange-50 transition-all shrink-0 ml-1`}>
+                            <span className="text-xs md:text-sm font-black text-gray-500 group-hover:text-orange-600 whitespace-nowrap">
+                              {isCollapsed ? '點擊展開' : '收合'}
+                            </span>
+                            <ChevronDown className={`w-4 h-4 md:w-5 md:h-5 text-gray-400 group-hover:text-orange-600 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`} />
                           </div>
                         </div>
                         
+                        {/* 內容區塊 (受收合狀態控制) */}
                         {!isCollapsed && (
-                          <div className="p-4 md:p-5 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
-                            <div className="flex flex-col gap-3">
+                          <div className="p-4 md:p-6 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
+                            <div className="flex flex-col gap-3 md:gap-4">
                               {dayData.events.map(t => {
                                 const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
                                 const isExpanded = expandedNotes[t.id];
@@ -726,52 +736,53 @@ export default function App() {
                                 return (
                                   <div 
                                     key={t.id} 
-                                    className={`group rounded-xl border border-gray-200 bg-white transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:border-orange-300 hover:shadow-md hover:bg-orange-50/30' : ''}`} 
+                                    className={`group rounded-xl md:rounded-2xl border border-gray-200 bg-white transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:border-orange-400 hover:shadow-md hover:bg-orange-50/40' : ''}`} 
                                     onClick={(e) => hasDetails && toggleNote(e, t.id)}
                                   >
-                                    <div className="p-4 flex flex-row items-center gap-3 md:gap-5 relative">
+                                    <div className="p-4 md:p-6 flex flex-row items-center gap-3 md:gap-6 relative">
                                       
-                                      <div className="shrink-0 w-16 md:w-20 text-center">
-                                        <span className="text-xl md:text-2xl font-black text-orange-600 tracking-tighter drop-shadow-sm">{t.time}</span>
+                                      <div className="shrink-0 w-14 md:w-20 text-center">
+                                        <span className="text-xl md:text-3xl font-black text-orange-600 tracking-tighter drop-shadow-sm">{t.time}</span>
                                       </div>
                                       
-                                      <div className="hidden md:block w-1 h-10 bg-gray-100 rounded-full shrink-0"></div>
+                                      <div className="hidden md:block w-1 h-12 bg-gray-100 rounded-full shrink-0"></div>
                                       
                                       <div className="flex-1 min-w-0 py-1">
-                                        <div className="flex items-center flex-wrap gap-1.5 mb-1.5">
+                                        <div className="flex items-center flex-wrap gap-2 mb-1.5 md:mb-2">
                                           <GameBadge type={t.gameType} />
-                                          <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
+                                          {/* 💡 費用標籤支援手機到桌機的無縫字體縮放 */}
+                                          <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500"/>方案：{t.fee}</span>
                                         </div>
-                                        <h4 className="font-black text-gray-800 text-lg md:text-xl leading-snug break-words pr-2">{t.title}</h4>
+                                        {/* 賽事名稱在手機上維持 16px，電腦上放大至 20px */}
+                                        <h4 className="font-black text-gray-800 text-base md:text-xl leading-snug break-words pr-2">{t.title}</h4>
                                       </div>
 
+                                      {/* 💡 詳情互動按鈕 (統一成明顯的藥丸型式) */}
                                       {hasDetails && (
-                                        <div className="shrink-0 pl-1 flex flex-col items-center gap-1">
-                                          <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center transition-colors shadow-sm border ${isExpanded ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-400 group-hover:bg-orange-100 group-hover:border-orange-300 group-hover:text-orange-600'}`}>
-                                            {isExpanded ? <ChevronUp className="w-4 h-4 md:w-5 md:h-5" /> : <ChevronDown className="w-4 h-4 md:w-5 md:h-5" />}
+                                        <div className="shrink-0 pl-1 flex flex-col items-center justify-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                                          <div className={`w-9 h-9 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-colors shadow-sm border ${isExpanded ? 'bg-orange-100 border-orange-300 text-orange-600' : 'bg-gray-50 border-gray-200 text-gray-400 group-hover:bg-orange-50 group-hover:border-orange-300 group-hover:text-orange-500'}`}>
+                                            {isExpanded ? <ChevronUp className="w-5 h-5 md:w-6 md:h-6" /> : <ChevronDown className="w-5 h-5 md:w-6 md:h-6" />}
                                           </div>
+                                          <span className={`text-[10px] md:text-xs font-black ${isExpanded ? 'text-orange-600' : 'text-gray-400 group-hover:text-orange-500'}`}>
+                                            {isExpanded ? '收起' : '詳情'}
+                                          </span>
                                         </div>
                                       )}
                                     </div>
-                                    
-                                    {hasDetails && !isExpanded && (
-                                      <div className="md:hidden text-center text-[10px] font-bold text-gray-400 pb-2 group-hover:text-orange-500 transition-colors">
-                                        👆 點擊卡片查看賽制與獎勵
-                                      </div>
-                                    )}
 
+                                    {/* 備註與圖庫展開區 */}
                                     {isExpanded && (
-                                      <div className="px-4 md:px-5 pb-5 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
-                                        <div className="pt-4 border-t border-gray-100">
+                                      <div className="px-4 md:px-6 pb-5 md:pb-6 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
+                                        <div className="pt-4 md:pt-5 border-t border-gray-100">
                                           <ImageCarousel tournament={t} />
-                                          <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
+                                          <div className="text-sm md:text-base text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 md:p-5 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
                                           
                                           {t.prizeImages && t.prizeImages.length > 0 && (
-                                            <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                              <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                                <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
+                                            <div className="mt-4 md:mt-5 p-4 md:p-5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
+                                              <div className="text-sm md:text-base font-black text-orange-800 mb-3 md:mb-4 flex items-center gap-1.5">
+                                                <Gift className="w-5 h-5 md:w-6 md:h-6 text-orange-500" /> 豪華獎勵一覽
                                               </div>
-                                              <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+                                              <div className={`grid gap-3 md:gap-4 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
                                                 {t.prizeImages.map((img, i) => (
                                                   <img 
                                                     key={`prize-img-${i}`} 
@@ -895,8 +906,8 @@ export default function App() {
                                 
                                 {t.prizeImages && t.prizeImages.length > 0 && (
                                   <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                    <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                      <Gift className="w-4 h-4 text-orange-500" /> 豪華獎勵一覽
+                                    <div className="text-sm font-black text-orange-800 mb-2 flex items-center gap-1.5">
+                                      <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
                                     </div>
                                     <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
                                       {t.prizeImages.map((img, i) => (
