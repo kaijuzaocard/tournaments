@@ -24,8 +24,10 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 🔒 特助終極修復：將 appId 完全鎖死，確保正式環境絕對能精準讀取舊資料！
-const appId = 'kaijuzaocard-main';
+// 🔒 特助終極修復：精準抓取環境變數，過濾掉 _src 等後綴，完美對齊 Firebase 的安全權限要求！
+const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
+const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
+const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -78,7 +80,8 @@ export default function App() {
   const [newTutorialBanner, setNewTutorialBanner] = useState({ title: '', url: '' });
   const [tutorialIdx, setTutorialIdx] = useState(0);
   
-  const [formData, setFormData] = useState({ gameType: 'UA', title: '', fee: '', description: '', images: [], prizeImages: [] });
+  // 💡 特助修復：將預設的 'UA' 拿掉，改為空字串，讓系統稍後自動抓取分類庫的真實第一筆資料
+  const [formData, setFormData] = useState({ gameType: '', title: '', fee: '', description: '', images: [], prizeImages: [] });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
 
   const [expandedNotes, setExpandedNotes] = useState({});
@@ -208,8 +211,9 @@ export default function App() {
 
     setupListener(getCollection('game_categories'), (data) => {
       setCategories(data);
-      if (data.length > 0 && !reserveForm.gameType) {
-        setReserveForm(prev => ({ ...prev, gameType: data[0].gameType }));
+      if (data.length > 0) {
+        setReserveForm(prev => prev.gameType ? prev : { ...prev, gameType: data[0].gameType });
+        setFormData(prev => prev.gameType ? prev : { ...prev, gameType: data[0].gameType });
       }
     });
 
@@ -521,7 +525,6 @@ export default function App() {
     return dotMap[bgClass] || 'bg-gray-500';
   };
 
-  // 💡 特助 UX 升級：根據需求動態設定標籤大小，讓不同裝置都能完美呈現
   const GameBadge = ({ type, size = 'sm' }) => {
     const cat = categories.find(c => c.gameType === type) || { label: type, color: 'bg-gray-200' };
     const sizeClasses = size === 'md' ? 'px-3 py-1.5 text-sm md:text-base shadow-sm border border-black/5' : 'px-2 py-0.5 text-xs';
@@ -604,14 +607,12 @@ export default function App() {
             <div className="flex flex-col gap-3">
               <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
               
-              {/* 💡 RWD 頂級 UX 升級：藍圈需求，將提示條改為自適應的全版面動態設計！ */}
               <div className="flex flex-col md:flex-row gap-3 px-1 mb-1 items-start md:items-center justify-between">
                 <div className="w-full md:w-auto text-xs md:text-sm font-black text-orange-700 bg-gradient-to-r from-orange-100 to-orange-50 border border-orange-200 px-4 py-2 rounded-xl flex items-center justify-center md:justify-start shadow-sm animate-[pulse_3s_ease-in-out_infinite]">
                   <Info className="w-4 h-4 mr-1.5 shrink-0 text-orange-500" />
                   點擊下方標籤，可「多選」篩選想看的遊戲喔！
                 </div>
 
-                {/* 🔴 紅圈大升級：將新手教學按鈕獨立放大，設計成醒目的漸層寬版按鈕 */}
                 <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink-0">
                   🎓 點我快速預約【新手教學】 👉
                 </button>
@@ -677,7 +678,6 @@ export default function App() {
                     const isCollapsed = collapsedDates[date] !== undefined ? collapsedDates[date] : (index !== 0 || dayData.isClosure);
                     const dayGameTypes = [...new Set(dayData.events.map(e => e.gameType))];
 
-                    // 🟡 黃圈升級：如果是店休，直接呈現單行橫幅，拔除收合箭頭功能
                     if (dayData.isClosure) {
                       return (
                         <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-gray-100 overflow-hidden opacity-90 flex items-center justify-between px-5 py-4 md:px-6 md:py-5">
@@ -693,11 +693,9 @@ export default function App() {
                       );
                     }
 
-                    // 正常的賽事日排版
                     return (
                       <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-white overflow-hidden transition-all duration-300">
                         
-                        {/* 📅 可點擊收合的日期群組標題列 */}
                         <div 
                           className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-200 px-4 md:px-6 py-4 md:py-5 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors group"
                           onClick={() => toggleDateCollapse(date)}
@@ -708,7 +706,6 @@ export default function App() {
                               <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
                             </div>
                             
-                            {/* 🔵 藍圈升級：當日賽事標籤預覽放大版 */}
                             {dayGameTypes.length > 0 && (
                               <div className="flex items-center flex-wrap gap-1.5 md:gap-2 ml-0 sm:ml-3">
                                 {dayGameTypes.map(type => <GameBadge key={type} type={type} size="md" />)}
@@ -716,7 +713,6 @@ export default function App() {
                             )}
                           </div>
 
-                          {/* 💡 終級修復：按鈕「文字化」並加強觸控區域，解決不知道可以按的問題 */}
                           <div className={`flex items-center gap-1.5 md:gap-2 bg-white border border-gray-200 px-3 py-1.5 md:px-4 md:py-2 rounded-full shadow-sm group-hover:border-orange-300 group-hover:bg-orange-50 transition-all shrink-0 ml-1`}>
                             <span className="text-xs md:text-sm font-black text-gray-500 group-hover:text-orange-600 whitespace-nowrap">
                               {isCollapsed ? '點擊展開' : '收合'}
@@ -725,7 +721,6 @@ export default function App() {
                           </div>
                         </div>
                         
-                        {/* 內容區塊 (受收合狀態控制) */}
                         {!isCollapsed && (
                           <div className="p-4 md:p-6 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
                             <div className="flex flex-col gap-3 md:gap-4">
@@ -750,14 +745,11 @@ export default function App() {
                                       <div className="flex-1 min-w-0 py-1">
                                         <div className="flex items-center flex-wrap gap-2 mb-1.5 md:mb-2">
                                           <GameBadge type={t.gameType} />
-                                          {/* 💡 費用標籤支援手機到桌機的無縫字體縮放 */}
                                           <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500"/>方案：{t.fee}</span>
                                         </div>
-                                        {/* 賽事名稱在手機上維持 16px，電腦上放大至 20px */}
                                         <h4 className="font-black text-gray-800 text-base md:text-xl leading-snug break-words pr-2">{t.title}</h4>
                                       </div>
 
-                                      {/* 💡 詳情互動按鈕 (統一成明顯的藥丸型式) */}
                                       {hasDetails && (
                                         <div className="shrink-0 pl-1 flex flex-col items-center justify-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                                           <div className={`w-9 h-9 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-colors shadow-sm border ${isExpanded ? 'bg-orange-100 border-orange-300 text-orange-600' : 'bg-gray-50 border-gray-200 text-gray-400 group-hover:bg-orange-50 group-hover:border-orange-300 group-hover:text-orange-500'}`}>
@@ -770,7 +762,6 @@ export default function App() {
                                       )}
                                     </div>
 
-                                    {/* 備註與圖庫展開區 */}
                                     {isExpanded && (
                                       <div className="px-4 md:px-6 pb-5 md:pb-6 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
                                         <div className="pt-4 md:pt-5 border-t border-gray-100">
@@ -906,8 +897,8 @@ export default function App() {
                                 
                                 {t.prizeImages && t.prizeImages.length > 0 && (
                                   <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                    <div className="text-sm font-black text-orange-800 mb-2 flex items-center gap-1.5">
-                                      <Gift className="w-5 h-5 text-orange-500" /> 豪華獎勵一覽
+                                    <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
+                                      <Gift className="w-4 h-4 text-orange-500" /> 本場豪華獎勵一覽
                                     </div>
                                     <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
                                       {t.prizeImages.map((img, i) => (
