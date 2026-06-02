@@ -1,1466 +1,1784 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 
-// ==========================================
-// Firebase 與 GAS 配置 (核心旗艦基底)
-// ==========================================
-const myFirebaseConfig = {
-  apiKey: "AIzaSyCaPWSmVV_R3zeGVeYj_g_AFu_JE-sGlpI",
-  authDomain: "kaijuzaocard-tournaments.firebaseapp.com",
-  projectId: "kaijuzaocard-tournaments",
-  storageBucket: "kaijuzaocard-tournaments.firebasestorage.app",
-  messagingSenderId: "950741417800",
-  appId: "1:950741417800:web:b8403334ab8be1641d7d7d",
-  measurementId: "G-3MY4BQGBVM"
+// 遊戲資料庫
+const GAME_DATABASE = {
+  ptcg: {
+    id: 'ptcg',
+    name: '寶可夢 (PTCG)',
+    packs: [
+      { cost: 43.2, price: 54, label: '43.2 (售價 $54)' },
+      { cost: 64, price: 79, label: '64.0 (售價 $79)' },
+    ],
+  },
+  ucg: {
+    id: 'ucg',
+    name: '超人力霸王 (UCG)',
+    packs: [{ cost: 47.21, price: 59, label: '47.21 (售價 $59)' }],
+  },
+  godzilla: {
+    id: 'godzilla',
+    name: '哥吉拉',
+    packs: [{ cost: 104.32, price: 120, label: '104.32 (售價 $120)' }],
+  },
+  nivel: {
+    id: 'nivel',
+    name: 'Nivel Arena',
+    packs: [{ cost: 35.525, price: 45, label: '35.525 (售價 $45)' }],
+  },
 };
 
-const GAS_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbywkOTGBA5hh_vGfK2xHy2YE4uMnQNqbWrAHHtiB3wPoKWJJ9xu2IJqND-CqGHdu8d_/exec";
+const ChevronIcon = ({ expanded, className = "text-slate-400" }) => (
+  <svg className={`w-3.5 h-3.5 transition-transform duration-300 ${expanded ? 'rotate-180' : ''} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+  </svg>
+);
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const nCr = (n, r) => {
+  if (r < 0 || r > n) return 0;
+  let res = 1;
+  for (let i = 1; i <= r; i++) res = res * (n - i + 1) / i;
+  return res;
+};
 
-// 🔒 特助終極修復：精準抓取環境變數，過濾掉 _src 等後綴，完美對齊 Firebase 的安全權限要求！
-const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
-const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
-const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
+const closestStandard = (p) => {
+  const standards = [4, 8, 12, 16, 20, 24, 28, 32];
+  return standards.reduce((prev, curr) => Math.abs(curr - p) < Math.abs(prev - p) ? curr : prev);
+};
 
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [tournaments, setTournaments] = useState([]);
-  const [currentView, setCurrentView] = useState('player'); 
-  const [isLoading, setIsLoading] = useState(true);
+const getSwissWorstCaseDist = (P, R) => {
+  const key = `${P}_${R}`;
+  const distTable = {
+    "2_3":  { top: 1, sub: 0, mid: 0, lowMid: 0, bot: 1 },
+    "3_3":  { top: 1, sub: 1, mid: 0, lowMid: 0, bot: 1 },
+    "4_3":  { top: 1, sub: 1, mid: 0, lowMid: 0, bot: 2 },
+    "5_3":  { top: 1, sub: 2, mid: 0, lowMid: 0, bot: 2 },
+    "8_3":  { top: 1, sub: 3, mid: 0, lowMid: 0, bot: 4 },
+    "9_3":  { top: 2, sub: 3, mid: 0, lowMid: 0, bot: 4 },
+    "12_3": { top: 2, sub: 4, mid: 0, lowMid: 0, bot: 6 },
+    "16_3": { top: 2, sub: 6, mid: 0, lowMid: 0, bot: 8 },
+    "17_3": { top: 3, sub: 6, mid: 0, lowMid: 0, bot: 8 }, 
+    "20_3": { top: 3, sub: 7, mid: 0, lowMid: 0, bot: 10 },
+    "24_3": { top: 3, sub: 9, mid: 0, lowMid: 0, bot: 12 },
+    "28_3": { top: 4, sub: 10, mid: 0, lowMid: 0, bot: 14 },
+    "32_3": { top: 4, sub: 12, mid: 0, lowMid: 0, bot: 16 },
+    "33_3": { top: 5, sub: 12, mid: 0, lowMid: 0, bot: 16 }, 
 
-  const loadingMessages = [
-    "🚀 連接光輝街 113 號基地中...",
-    "🦖 野生的賽程表正在努力載入中...",
-    "✨ 光之巨人們正在趕來的路上...",
-    "🎁 正在為您準備最豪華的奪包獎勵...",
-    "🔥 咔友們準備好開戰了嗎？"
-  ];
-  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
+    "8_4":  { top: 1, sub: 2, mid: 0, lowMid: 2, bot: 3 },
+    "9_4":  { top: 1, sub: 3, mid: 0, lowMid: 3, bot: 2 }, 
+    "12_4": { top: 1, sub: 3, mid: 0, lowMid: 4, bot: 4 },
+    "16_4": { top: 1, sub: 4, mid: 0, lowMid: 6, bot: 5 },
+    "17_4": { top: 2, sub: 4, mid: 0, lowMid: 6, bot: 5 }, 
+    "20_4": { top: 2, sub: 5, mid: 0, lowMid: 7, bot: 6 },
+    "24_4": { top: 2, sub: 6, mid: 0, lowMid: 8, bot: 8 },
+    "25_4": { top: 2, sub: 7, mid: 0, lowMid: 8, bot: 8 },
+    "28_4": { top: 2, sub: 8, mid: 0, lowMid: 10, bot: 8 },
+    "32_4": { top: 2, sub: 10, mid: 0, lowMid: 10, bot: 10 },
+    "33_4": { top: 3, sub: 10, mid: 0, lowMid: 10, bot: 10 },
 
-  const [isAdminAuth, setIsAdminAuth] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [pwdError, setPwdError] = useState(false);
-  const [weekStartsOnMonday, setWeekStartsOnMonday] = useState(false);
-
-  const [playerFilters, setPlayerFilters] = useState(['All']);
-  const [viewMode, setViewMode] = useState('list'); 
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState(null);
-
-  const [collapsedDates, setCollapsedDates] = useState({});
-
-  const [adminMonth, setAdminMonth] = useState(new Date());
-  const [adminSelectedDate, setAdminSelectedDate] = useState(null);
-  const [categories, setCategories] = useState([]);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [newCategoryColor, setNewCategoryColor] = useState('bg-red-200');
-
-  const [notePresets, setNotePresets] = useState([]);
-  const [newPresetTitle, setNewPresetTitle] = useState('');
-  const [reservations, setReservations] = useState([]);
-  const [closures, setClosures] = useState([]); 
-  const [specialOpenings, setSpecialOpenings] = useState([]); 
-  const [closureReason, setClosureReason] = useState(''); 
-  
-  const [batchStartDate, setBatchStartDate] = useState('');
-  const [batchEndDate, setBatchEndDate] = useState('');
-  const [batchReason, setBatchReason] = useState('');
-
-  const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
-  const [reserveSuccess, setReserveSuccess] = useState(false);
-
-  const [tutorialBanners, setTutorialBanners] = useState([]);
-  const [newTutorialBanner, setNewTutorialBanner] = useState({ title: '', url: '' });
-  const [tutorialIdx, setTutorialIdx] = useState(0);
-  
-  // 💡 特助修復：將預設的 'UA' 拿掉，改為空字串，讓系統稍後自動抓取分類庫的真實第一筆資料
-  const [formData, setFormData] = useState({ gameType: '', title: '', fee: '', description: '', images: [], prizeImages: [] });
-  const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
-
-  const [expandedNotes, setExpandedNotes] = useState({});
-  const [currentImgIdx, setCurrentImgIdx] = useState({});
-  const [editingId, setEditingId] = useState(null);
-  const [editFormData, setEditFormData] = useState(null);
-
-  const [fullscreenImage, setFullscreenImage] = useState(null);
-  const [isSendingLine, setIsSendingLine] = useState(false);
-  
-  const [toastMsg, setToastMsg] = useState('');
-
-  const categoryScrollRef = useRef(null);
-  const hasRandomizedBanner = useRef(false);
-
-  const showToast = (msg) => {
-    setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 4000);
+    "16_5": { top: 1, sub: 3, mid: 4, lowMid: 4, bot: 4 },
+    "17_5": { top: 1, sub: 3, mid: 5, lowMid: 4, bot: 4 }, 
+    "20_5": { top: 1, sub: 4, mid: 6, lowMid: 5, bot: 4 },
+    "24_5": { top: 1, sub: 4, mid: 7, lowMid: 8, bot: 4 },
+    "25_5": { top: 2, sub: 4, mid: 7, lowMid: 8, bot: 4 }, 
+    "28_5": { top: 2, sub: 5, mid: 8, lowMid: 9, bot: 4 },
+    "32_5": { top: 2, sub: 5, mid: 10, lowMid: 10, bot: 5 },
+    "33_5": { top: 3, sub: 5, mid: 10, lowMid: 10, bot: 5 }  
   };
+  if (distTable[key]) return distTable[key];
 
-  const sendLineNotification = async (data, isTest = false) => {
-    setIsSendingLine(true);
-    
-    const payloadData = isTest ? {
-      name: "店長診斷測試",
-      contact: "測試聯絡人",
-      gameType: "系統通訊測試",
-      date: "今天",
-      time: "現在"
-    } : data;
-
-    try {
-      await fetch(GAS_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payloadData)
-      });
-      
-      if (isTest) showToast("🎉 GAS 轉發測試成功！請檢查您的 Google 試算表與 LINE 群組。");
-    } catch (err) {
-      console.error("GAS 轉發失敗:", err);
-      if (isTest) showToast("❌ 發送失敗，請檢查網路狀況。");
-    } finally {
-      setIsSendingLine(false);
-    }
-  };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setLoadingMsgIdx(prev => (prev + 1) % loadingMessages.length);
-    }, 800);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          try {
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } catch (e) {
-            console.warn("Custom token failed, falling back to anonymous");
-            await signInAnonymously(auth);
-          }
-        } else {
-          await signInAnonymously(auth); 
-        }
-      } catch (error) {
-        console.error("Firebase 驗證失敗", error);
-        setIsLoading(false); 
-      }
-    };
-    initAuth();
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
-    return () => unsubscribeAuth();
-  }, []);
-
-  useEffect(() => {
-    if (!user || !db) return;
-
-    const getCollection = (collectionName) => 
-      collection(db, 'artifacts', appId, 'public', 'data', collectionName);
-    
-    const unsubs = [];
-    let loadedCount = 0;
-    const totalCollections = 7; 
-
-    const checkAllLoaded = () => {
-      loadedCount++;
-      if (loadedCount >= totalCollections) {
-        setTimeout(() => setIsLoading(false), 200); 
-      }
-    };
-
-    const setupListener = (colRef, setter, sortFn = null) => {
-      let isFirstLoad = true;
-      const unsub = onSnapshot(colRef, { includeMetadataChanges: true },
-        (snapshot) => {
-          let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          if (sortFn) data = sortFn(data);
-          setter(data);
-          
-          if (isFirstLoad && !snapshot.metadata.fromCache) {
-            isFirstLoad = false;
-            checkAllLoaded();
-          } else if (isFirstLoad && data.length > 0) {
-            isFirstLoad = false;
-            checkAllLoaded();
-          }
-        }, 
-        (err) => {
-          console.error(`讀取 ${colRef.path} 失敗:`, err);
-          if (isFirstLoad) {
-            isFirstLoad = false;
-            checkAllLoaded(); 
-          }
-        }
-      );
-      unsubs.push(unsub);
-    };
-
-    setupListener(getCollection('monster_tournaments'), setTournaments, (data) => 
-      data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`))
-    );
-
-    setupListener(getCollection('game_categories'), (data) => {
-      setCategories(data);
-      if (data.length > 0) {
-        setReserveForm(prev => prev.gameType ? prev : { ...prev, gameType: data[0].gameType });
-        setFormData(prev => prev.gameType ? prev : { ...prev, gameType: data[0].gameType });
-      }
-    });
-
-    setupListener(getCollection('note_presets'), setNotePresets);
-
-    setupListener(getCollection('tutorial_reservations'), setReservations, (data) =>
-      data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    );
-
-    setupListener(getCollection('tutorial_banners'), setTutorialBanners, (data) =>
-      data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-    );
-
-    setupListener(getCollection('store_closures'), setClosures); 
-    setupListener(getCollection('special_openings'), setSpecialOpenings);
-
-    return () => unsubs.forEach(unsub => unsub());
-  }, [user]);
-
-  useEffect(() => {
-    const fallbackTimer = setTimeout(() => {
-      setIsLoading(false);
-    }, 6000);
-    return () => clearTimeout(fallbackTimer);
-  }, []);
-
-  useEffect(() => {
-    if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
-      const randomStartIdx = Math.floor(Math.random() * tutorialBanners.length);
-      setTutorialIdx(randomStartIdx);
-      hasRandomizedBanner.current = true;
-    }
-  }, [tutorialBanners]);
-
-  const getClosureObj = (dateStr) => {
-    if (!dateStr) return null;
-    const customClosure = closures.find(c => c.date === dateStr);
-    if (customClosure) return customClosure;
-    
-    const parts = dateStr.split('-');
-    if (parts.length === 3) {
-      const d = new Date(parts[0], parts[1] - 1, parts[2]);
-      if (d.getDay() === 2) {
-        const isSpecialOpen = specialOpenings.some(o => o.date === dateStr);
-        if (!isSpecialOpen) {
-          return { reason: '週二固定公休', isDefault: true };
-        }
-      }
-    }
-    return null;
-  };
-
-  const toggleNote = (e, id) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setExpandedNotes(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const toggleDateCollapse = (date) => {
-    setCollapsedDates(prev => ({ ...prev, [date]: !prev[date] }));
-  };
-
-  const compressImage = (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX = 800; let w = img.width, h = img.height;
-          if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } }
-          else { if (h > MAX) { w *= MAX / h; h = MAX; } }
-          canvas.width = w; canvas.height = h;
-          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const handleAdminLogin = (e) => {
-    e.preventDefault();
-    if (passwordInput === 'monster113') { setIsAdminAuth(true); setPwdError(false); setPasswordInput(''); }
-    else { setPwdError(true); setPasswordInput(''); }
-  };
-
-  const togglePlayerFilter = (id) => {
-    if (id === 'All') { setPlayerFilters(['All']); return; }
-    setPlayerFilters(prev => {
-      let next = prev.filter(p => p !== 'All');
-      if (next.includes(id)) {
-        next = next.filter(p => p !== id);
-        return next.length === 0 ? ['All'] : next;
-      }
-      return [...next, id];
-    });
-  };
-
-  const handleAddTournament = async (e) => {
-    e.preventDefault();
-    if (!user || !formData.title || schedules.length === 0) return;
-    const validSchedules = schedules.filter(s => s.date && s.time);
-    if (validSchedules.length === 0) return;
-    try {
-      const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
-      const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...formData, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
-      await Promise.all(promises);
-      setFormData({ ...formData, title: '', description: '', images: [], prizeImages: [] });
-      setSchedules([{ date: '', time: '19:00' }]);
-      showToast('✅ 賽事已成功發布！');
-    } catch (err) { console.error(err); }
-  };
-
-  const handleSaveEdit = async (e) => {
-    e.preventDefault();
-    if (!user || !editingId || !editFormData) return;
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', editingId), {
-        ...editFormData,
-        updatedAt: new Date().toISOString()
-      });
-      setEditingId(null);
-      setEditFormData(null);
-      showToast('✅ 賽事內容已更新！');
-    } catch (error) {
-      console.error("Error updating document: ", error);
-    }
-  };
-
-  const handleAddTutorialBanner = async (e) => {
-    e.preventDefault();
-    if (!newTutorialBanner.title || !newTutorialBanner.url) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners'), {
-        ...newTutorialBanner, createdAt: new Date().toISOString()
-      });
-      setNewTutorialBanner({ title: '', url: '' });
-      if (document.getElementById('tutorial-banner-file')) document.getElementById('tutorial-banner-file').value = '';
-      showToast('✅ 教學福利圖已新增！');
-    } catch (error) { console.error(error); }
-  };
-
-  const handleReserveSubmit = async (e) => {
-    e.preventDefault();
-    if (!user || !reserveForm.name || !reserveForm.contact) return;
-
-    const closureObj = getClosureObj(reserveForm.date);
-    if (closureObj) {
-      showToast(`⛔ 拍謝啦！這天基地剛好【${closureObj.reason}】，請改約其他天來玩喔！`);
-      return;
-    }
-
-    if (reserveForm.time < '13:00' || reserveForm.time > '21:00') {
-      showToast('⏰ 現場教學時間為 13:00~21:00，請重新選擇時段喔！');
-      return;
-    }
-
-    try {
-      const reserveData = { 
-        ...reserveForm, 
-        gameType: reserveForm.gameType || (categories[0]?.gameType || '未指定'),
-        status: 'pending', 
-        createdAt: new Date().toISOString() 
-      };
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations'), reserveData);
-      await sendLineNotification(reserveData); 
-      setReserveSuccess(true);
-      setReserveForm(prev => ({ ...prev, date: '', time: '', name: '', contact: '' }));
-      setTimeout(() => setReserveSuccess(false), 8000); 
-    } catch (error) { console.error(error); }
-  };
-
-  const handleAddCategory = async (e) => {
-    e.preventDefault();
-    if (!user || !newCategoryName.trim()) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'game_categories'), { 
-        gameType: newCategoryName.trim(), label: newCategoryName.trim(), color: newCategoryColor, createdAt: new Date().toISOString() 
-      });
-      setNewCategoryName('');
-      showToast('✅ 新遊戲分類已加入！');
-    } catch (error) { console.error(error); }
-  };
-
-  const handleSavePreset = async () => {
-    if (!user || !newPresetTitle.trim() || !formData.description.trim()) return;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'note_presets'), {
-        title: newPresetTitle.trim(), content: formData.description.trim(), createdAt: new Date().toISOString()
-      });
-      setNewPresetTitle('');
-      showToast('✅ 備註模板已儲存！');
-    } catch (error) { console.error("Error saving preset: ", error); }
-  };
-
-  const handleDeletePreset = async (id) => {
-    if (!user) return;
-    try { 
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'note_presets', id)); 
-      showToast('🗑️ 備註模板已刪除！');
-    } 
-    catch (error) { console.error("Error deleting preset: ", error); }
-  };
-
-  const handleToggleDayStatus = async (dateStr) => {
-    if (!user) return;
-    try {
-      const closureObj = getClosureObj(dateStr);
-      
-      if (closureObj) {
-        if (closureObj.isDefault) {
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'special_openings'), {
-            date: dateStr,
-            createdAt: new Date().toISOString()
-          });
-          showToast('✨ 封印解除！已將此週二設為特別營業日！');
-        } else {
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'store_closures', closureObj.id));
-          showToast('✅ 已解除店休，恢復正常營業！');
-        }
-      } else {
-        const specialOpen = specialOpenings.find(o => o.date === dateStr);
-        if (specialOpen) {
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'special_openings', specialOpen.id));
-          showToast('🔄 已取消特別營業，恢復週二固定公休！');
-        } else {
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
-            date: dateStr,
-            reason: closureReason || '店休',
-            createdAt: new Date().toISOString()
-          });
-          showToast('⛔ 已設定為店休！');
-          setClosureReason(''); 
-        }
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('❌ 設定狀態失敗');
-    }
-  };
-
-  const handleBatchClosure = async (e) => {
-    e.preventDefault();
-    if (!user || !batchStartDate || !batchEndDate) return;
-
-    const start = new Date(batchStartDate);
-    const end = new Date(batchEndDate);
-
-    if (start > end) {
-      showToast('❌ 結束日期不能早於開始日期喔！');
-      return;
-    }
-
-    try {
-      const promises = [];
-      let count = 0;
-      
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        if (!getClosureObj(dateStr)) {
-          promises.push(
-            addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'store_closures'), {
-              date: dateStr,
-              reason: batchReason || '店休',
-              createdAt: new Date().toISOString()
-            })
-          );
-          count++;
-        }
-      }
-      
-      await Promise.all(promises);
-      showToast(`✅ 狂！已成功批量設定 ${count} 天店休！`);
-      setBatchStartDate('');
-      setBatchEndDate('');
-      setBatchReason('');
-    } catch (err) {
-      console.error(err);
-      showToast('❌ 批量設定店休失敗');
-    }
-  };
-
-  const formatEventDate = (dateString) => {
-    if (!dateString) return '';
-    if (typeof dateString !== 'string') return String(dateString);
-    const parts = dateString.split('-');
-    if (parts.length !== 3) return dateString;
-    const date = new Date(parts[0], parts[1] - 1, parts[2]);
-    if (isNaN(date.getTime())) return dateString; 
-    const days = ['日', '一', '二', '三', '四', '五', '六'];
-    return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}(${days[date.getDay()]})`;
-  };
-
-  const renderTextWithLinks = (text) => {
-    if (!text) return '';
-    if (typeof text !== 'string') return String(text);
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return text.split(urlRegex).map((part, i) => (part.startsWith('http')) ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline font-black" onClick={(e) => e.stopPropagation()}>{part}</a> : <span key={i}>{part}</span>);
-  };
-
-  const getDotColor = (bgClass) => {
-    const dotMap = {
-      'bg-red-200': 'bg-red-500', 'bg-orange-200': 'bg-orange-500', 'bg-yellow-200': 'bg-yellow-500',
-      'bg-green-200': 'bg-green-500', 'bg-blue-200': 'bg-blue-500', 'bg-indigo-200': 'bg-indigo-500',
-      'bg-purple-200': 'bg-purple-500', 'bg-gray-400': 'bg-gray-800', 'bg-white border border-gray-300': 'bg-gray-400'
-    };
-    return dotMap[bgClass] || 'bg-gray-500';
-  };
-
-  const GameBadge = ({ type, size = 'sm' }) => {
-    const cat = categories.find(c => c.gameType === type) || { label: type, color: 'bg-gray-200' };
-    const sizeClasses = size === 'md' ? 'px-3 py-1.5 text-sm md:text-base shadow-sm border border-black/5' : 'px-2 py-0.5 text-xs';
-    return <span className={`${sizeClasses} font-black rounded-lg text-black ${cat.color} shrink-0`}>{cat.label}</span>;
-  };
-
-  const ImageCarousel = ({ tournament }) => {
-    const imgs = Array.isArray(tournament.images) && tournament.images.length > 0 ? tournament.images : (tournament.image ? [tournament.image] : []);
-    const idx = currentImgIdx[tournament.id] || 0; if (imgs.length === 0) return null;
-    const safeIdx = idx % imgs.length;
-    return (
-      <div className="mb-3 relative rounded-xl overflow-hidden border border-gray-100 shadow-sm group bg-gray-50 flex items-center justify-center">
-        <img src={imgs[safeIdx]} alt="主視覺" className="w-full h-auto object-cover cursor-zoom-in" onClick={(e) => { e.stopPropagation(); setFullscreenImage(imgs[safeIdx]); }} />
-        {imgs.length > 1 && (
-          <><button onClick={(e) => { e.stopPropagation(); setCurrentImgIdx(p => ({...p, [tournament.id]: (safeIdx-1+imgs.length)%imgs.length})); }} className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full shadow-sm"><ChevronLeft className="w-5 h-5" /></button><button onClick={(e) => { e.stopPropagation(); setCurrentImgIdx(p => ({...p, [tournament.id]: (safeIdx+1)%imgs.length})); }} className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 text-white p-1.5 rounded-full shadow-sm"><ChevronRight className="w-5 h-5" /></button><div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">{imgs.map((_, i) => <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all ${i === safeIdx ? 'bg-white scale-125 shadow-md' : 'bg-white/50'}`} />)}</div></>
-        )}
-      </div>
-    );
-  };
-
-  const TutorialCarousel = ({ banners, tutorialIdx, setTutorialIdx }) => {
-    if (!banners || banners.length === 0) return <div className="py-10 text-center text-gray-400 font-bold w-full h-full flex items-center justify-center bg-orange-50 rounded-2xl border-2 border-dashed border-orange-200">新手福利圖準備中...🚀</div>;
-    const safeIdx = tutorialIdx % banners.length;
-    const banner = banners[safeIdx];
-    const prevIdx = (safeIdx - 1 + banners.length) % banners.length;
-    const nextIdx = (safeIdx + 1) % banners.length;
-    return (
-      <div className="w-full flex flex-col items-center">
-        <div className="relative w-full py-5 bg-orange-50/50 rounded-2xl overflow-hidden flex items-center justify-center border border-orange-100 min-h-[250px] shadow-inner">
-          {banners.length > 1 && (<div className="absolute right-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer" onClick={() => setTutorialIdx(prevIdx)}><img src={banners[prevIdx].url} className="w-full h-full object-cover" /></div>)}
-          <div className="relative z-10 w-[85%] aspect-square rounded-2xl overflow-hidden shadow-xl border-2 border-white"><img src={banner.url} className="w-full h-full object-cover" /><div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 backdrop-blur-md"><Sparkles className="w-2.5 h-2.5 text-yellow-400" /> {banner.title} 福利</div></div>
-          {banners.length > 1 && (<div className="absolute left-[88%] w-[80%] aspect-square rounded-2xl overflow-hidden opacity-40 scale-90 cursor-pointer" onClick={() => setTutorialIdx(nextIdx)}><img src={banners[nextIdx].url} className="w-full h-full object-cover" /></div>)}
-        </div>
-      </div>
-    );
-  };
-
-  const weekHeaders = weekStartsOnMonday ? ['一','二','三','四','五','六','日'] : ['日','一','二','三','四','五','六'];
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-6">
-        <div className="w-16 h-16 border-4 border-orange-200 border-t-orange-600 rounded-full animate-spin mb-6 shadow-md"></div>
-        <p className="text-orange-600 font-black text-lg animate-pulse tracking-wide text-center h-8">{loadingMessages[loadingMsgIdx]}</p>
-        <p className="text-gray-400 text-xs mt-3 font-bold bg-white px-3 py-1.5 rounded-full border">初次載入約需 1~3 秒，請稍候片刻喔！⏳</p>
-      </div>
-    );
+  const dist = { top: 0, sub: 0, mid: 0, lowMid: 0, bot: 0 };
+  dist.top = Math.ceil(P * Math.pow(0.5, R));
+  dist.sub = Math.ceil(P * R * Math.pow(0.5, R));
+  if (R >= 5) {
+    dist.mid = Math.ceil(P * nCr(R, 2) * Math.pow(0.5, R));
+    dist.lowMid = Math.ceil(P * nCr(R, 3) * Math.pow(0.5, R));
+  } else {
+    dist.lowMid = Math.ceil(P * nCr(R, 2) * Math.pow(0.5, R));
   }
+  dist.bot = Math.max(0, P - dist.top - dist.sub - dist.mid - dist.lowMid);
+  return dist;
+};
+
+const FeeController = ({ value, onChange, theme }) => {
+  const themes = {
+    rose: { bg: 'bg-rose-100', text: 'text-rose-700', hover: 'hover:bg-rose-200', border: 'border-rose-200' },
+    teal: { bg: 'bg-teal-100', text: 'text-teal-700', hover: 'hover:bg-teal-200', border: 'border-teal-200' },
+    emerald: { bg: 'bg-emerald-100', text: 'text-emerald-700', hover: 'hover:bg-emerald-200', border: 'border-emerald-200' },
+    blue: { bg: 'bg-blue-100', text: 'text-blue-700', hover: 'hover:bg-blue-200', border: 'border-blue-200' },
+    indigo: { bg: 'bg-indigo-100', text: 'text-indigo-700', hover: 'hover:bg-indigo-200', border: 'border-indigo-200' }
+  };
+  const c = themes[theme] || themes.teal;
 
   return (
-    <div className="min-h-screen bg-gray-100 font-sans pb-12 relative">
-      <nav className="bg-orange-600 text-white shadow-lg sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center transition-all duration-300">
-          <div className="flex items-center gap-2 font-black text-xl tracking-wider cursor-pointer" onClick={() => window.location.reload()}><Store className="w-6 h-6" /> 怪獸造咔</div>
-          <div className="flex gap-2">
-            <button onClick={() => setCurrentView('player')} className={`text-sm px-3 py-1.5 rounded-full font-bold ${currentView === 'player' ? 'bg-white text-orange-600 shadow-sm' : 'bg-orange-700'}`}>玩家看板</button>
-            <button onClick={() => setCurrentView('admin')} className={`text-sm px-3 py-1.5 rounded-full font-bold ${currentView === 'admin' ? 'bg-white text-orange-600 shadow-sm' : 'bg-orange-700'}`}>店家後台</button>
+    <div className="flex justify-between items-center bg-slate-50/80 p-1.5 rounded-lg border border-slate-200 mb-2 shadow-sm">
+      <span className="text-xs font-bold text-slate-500 pl-1 select-none">自訂門票</span>
+      <div className="flex items-center gap-2">
+         <button onClick={() => onChange(Math.max(50, value - 50))} className={`w-7 h-7 rounded-md ${c.bg} ${c.text} ${c.border} border font-black flex items-center justify-center ${c.hover} active:scale-95 transition-all shadow-sm`}>-</button>
+         <span className={`${c.text} font-black text-sm w-11 text-center select-none`}>${value}</span>
+         <button onClick={() => onChange(value + 50)} className={`w-7 h-7 rounded-md ${c.bg} ${c.text} ${c.border} border font-black flex items-center justify-center ${c.hover} active:scale-95 transition-all shadow-sm`}>+</button>
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  const [selectedGame, setSelectedGame] = useState('ptcg'); 
+  const [selectedPackIndex, setSelectedPackIndex] = useState(0);
+  const [entryFee, setEntryFee] = useState(200); 
+  const [targetMargin, setTargetMargin] = useState(38); 
+  const [minMargin, setMinMargin] = useState(25);
+  const [bottomPacks, setBottomPacks] = useState(1);
+  const [rewardModel, setRewardModel] = useState('god'); 
+  const [matchRounds, setMatchRounds] = useState('auto'); 
+  const [currentPlayers, setCurrentPlayers] = useState(12);
+  const [threePlayerMode, setThreePlayerMode] = useState('A');
+
+  const [grandPrizeCost, setGrandPrizeCost] = useState(2000);
+  const [grandPrizeMinMargin, setGrandPrizeMinMargin] = useState(20);
+
+  // 方案五雙軌規格報名費
+  const [fee2p, setFee2p] = useState(150);
+  const [fee3p, setFee3p] = useState(200);
+  
+  const [fee3r, setFee3r] = useState(250);
+  const [r3Mode, setR3Mode] = useState('pack'); 
+  const [r3PrizeCost, setR3PrizeCost] = useState(1000);
+
+  const [fee4r, setFee4r] = useState(300);
+  const [r4Mode, setR4Mode] = useState('pack');
+  const [r4PrizeCost, setR4PrizeCost] = useState(1500);
+
+  const [fee5r, setFee5r] = useState(400);
+  const [r5Mode, setR5Mode] = useState('pack');
+  const [r5PrizeCost, setR5PrizeCost] = useState(2000);
+
+  const [twoWinPolicy, setTwoWinPolicy] = useState('bottom');
+  const [champGap, setChampGap] = useState(2);
+  const [topTax, setTopTax] = useState(0);
+
+  const [godPrizeConfig, setGodPrizeConfig] = useState({
+    4: 600, 8: 1200, 12: 1800, 16: 2500, 20: 3200, 24: 4000, 28: 5000, 32: 6000,
+  });
+  const [godMidPacks, setGodMidPacks] = useState(1);
+  const [godSubPacks, setGodSubPacks] = useState(2);
+
+  const [godHelperA, setGodHelperA] = useState(8);
+  const [godHelperValA, setGodHelperValA] = useState(1200);
+  const [godHelperB, setGodHelperB] = useState(16);
+  const [godHelperValB, setGodHelperValB] = useState(2500);
+
+  const [fixedLotteryPacks, setFixedLotteryPacks] = useState(1);
+  const [lotteryPrizeConfig, setLotteryPrizeConfig] = useState({
+    8: 300, 12: 500, 16: 800, 20: 1100, 24: 1500, 28: 2000, 32: 2500,
+  });
+
+  const [lotteryHelperA, setLotteryHelperA] = useState(8);
+  const [lotteryHelperValA, setLotteryHelperValA] = useState(300);
+  const [lotteryHelperB, setLotteryHelperB] = useState(16);
+  const [lotteryHelperValB, setLotteryHelperValB] = useState(800);
+
+  const [isEmergencyEditable, setIsEmergencyEditable] = useState(false);
+  const [overrideWinner2, setOverrideWinner2] = useState('');
+  const [overrideLoser2, setOverrideLoser2] = useState('');
+  const [overrideP1_A, setOverrideP1_A] = useState('');
+  const [overrideP2_A, setOverrideP2_A] = useState('');
+  const [overrideP3_A, setOverrideP3_A] = useState('');
+  const [overrideP1_B, setOverrideP1_B] = useState('');
+  const [overrideP2_B, setOverrideP2_B] = useState('');
+  const [overrideP3_B, setOverrideP3_B] = useState('');
+
+  const [expandedSections, setExpandedSections] = useState({
+    round3: true, round4: true, round5Normal: true, round5Special: true,
+    counterTable: true, alertCenter: true, posterMilestones: true, emergencyPanel: true, 
+  });
+
+  const [gymCardExpanded, setGymCardExpanded] = useState({ league: false, normal: true, grand: true });
+  const [gymLeague2Expanded, setGymLeague2Expanded] = useState(false);
+  const [gymLeague3Expanded, setGymLeague3Expanded] = useState(false);
+
+  const [zoomLevel, setZoomLevel] = useState(100);
+  const [packCost, setPackCost] = useState(GAME_DATABASE.ptcg.packs[0].cost);
+  const [packPrice, setPackPrice] = useState(GAME_DATABASE.ptcg.packs[0].price);
+
+  const toggleSection = (section) => setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  const toggleGymCard = (card) => setGymCardExpanded((prev) => ({ ...prev, [card]: !prev[card] }));
+
+  useEffect(() => {
+    const targetPx = (zoomLevel / 100) * 16;
+    document.documentElement.style.fontSize = `${targetPx}px`;
+  }, [zoomLevel]);
+
+  useEffect(() => {
+    if (rewardModel === 'official-gym') {
+      setSelectedGame('ptcg');
+      setPackCost(GAME_DATABASE.ptcg.packs[0].cost);
+      setPackPrice(GAME_DATABASE.ptcg.packs[0].price);
+      setEntryFee(300);
+      setMatchRounds('3');
+    } else if (rewardModel === 'custom-spec') {
+      setMatchRounds('auto');
+    } else {
+      setMatchRounds('auto'); 
+    }
+  }, [rewardModel]);
+
+  const handleGameChange = (e) => {
+    if (rewardModel === 'official-gym') return;
+    const gameId = e.target.value;
+    const firstPack = GAME_DATABASE[gameId].packs[0];
+    setSelectedGame(gameId);
+    setSelectedPackIndex(0);
+    setPackCost(firstPack.cost);
+    setPackPrice(firstPack.price);
+  };
+
+  const handlePackChange = (e) => {
+    if (rewardModel === 'official-gym') return; 
+    const index = Number(e.target.value);
+    const pack = GAME_DATABASE[selectedGame].packs[index];
+    setSelectedPackIndex(index);
+    if (pack) { setPackCost(pack.cost); setPackPrice(pack.price); }
+  };
+
+  const applyLinearTrend = useCallback((modelType, p1, v1, p2, v2) => {
+    const numP1 = Number(p1); const numP2 = Number(p2); const numV1 = Number(v1); const numV2 = Number(v2);
+    if (isNaN(numP1) || isNaN(numP2) || isNaN(numV1) || isNaN(numV2) || numP1 === numP2) return; 
+
+    const slope = (numV2 - numV1) / (numP2 - numP1);
+    const intercept = numV1 - slope * numP1;
+    const newConfig = {};
+    const points = modelType === 'god' ? [4, 8, 12, 16, 20, 24, 28, 32] : [8, 12, 16, 20, 24, 28, 32];
+    
+    points.forEach(p => {
+      const rawVal = slope * p + intercept;
+      const val = Math.max(0, Math.ceil(rawVal / 50) * 50); 
+      newConfig[p] = val;
+    });
+
+    if (modelType === 'god') setGodPrizeConfig(prev => ({ ...prev, ...newConfig }));
+    else setLotteryPrizeConfig(prev => ({ ...prev, ...newConfig }));
+  }, []);
+
+  // V9.9.11 方案二專屬：一鍵套用逆推數據與大賽模組預設
+  const applyReverseConfig = (fee, players) => {
+    if (players > 100) return;
+    const p = closestStandard(players); // 對齊到最接近的人數級距以顯示於對照表
+    setEntryFee(fee);
+    setCurrentPlayers(p);
+    setGodPrizeConfig(prev => ({ ...prev, [p]: Number(grandPrizeCost) }));
+  };
+
+  const applyPresetEvent = (fee, botPacks, players) => {
+    setEntryFee(fee);
+    setBottomPacks(botPacks);
+    setCurrentPlayers(players);
+    setGodPrizeConfig(prev => ({ ...prev, [players]: Number(grandPrizeCost) }));
+  };
+
+  const resetGodMode = () => {
+    setEntryFee(200);
+    setBottomPacks(1);
+    setCurrentPlayers(12);
+    setGodPrizeConfig({
+      4: 600, 8: 1200, 12: 1800, 16: 2500, 20: 3200, 24: 4000, 28: 5000, 32: 6000,
+    });
+  };
+
+  const calcCustomFormatPacks = useCallback((fee, rounds, standardPlayers, mode = 'pack', prizeCost = 0) => {
+    const isPTCG = selectedGame === 'ptcg';
+    const step = isPTCG ? 3 : 1;
+
+    // --- 🎁 實體大獎模式 (逆推人數) ---
+    if (mode === 'prize') {
+      let defaultSub = step;
+      if (rounds === 4) defaultSub = isPTCG ? 6 : 2;
+      if (rounds === 5) defaultSub = isPTCG ? 6 : 2;
+
+      let bestP = -1;
+      let finalMargin = 0;
+      let finalCost = 0;
+      const startP = rounds === 3 ? 4 : (rounds === 4 ? 9 : 17);
+
+      for (let p = startP; p <= 100; p++) {
+        const rev = p * fee;
+        const dist = getSwissWorstCaseDist(p, rounds);
+        const botMultiplier = dist.mid + dist.lowMid + dist.bot;
+        const packsCost = (dist.sub * defaultSub + botMultiplier * bottomPacks) * packCost;
+        const totalCost = prizeCost + packsCost;
+        const margin = ((rev - totalCost) / rev) * 100;
+
+        if (margin >= targetMargin) {
+           bestP = p; finalMargin = margin; finalCost = totalCost;
+           break;
+        }
+      }
+
+      return {
+         isPrizeMode: true, prizeCost, sub: defaultSub, bot: bottomPacks,
+         minPlayers: bestP, margin: finalMargin, totalCost: finalCost
+      };
+    }
+
+    // --- ⚡ 純補充包模式 (1.5倍鋼鐵約束) ---
+    const rev = standardPlayers * fee;
+    const dist = getSwissWorstCaseDist(standardPlayers, rounds);
+    const botMultiplier = dist.mid + dist.lowMid + dist.bot;
+
+    let bestTop = step;
+    let bestSub = step;
+    let bestMargin = -100;
+    let hasSolution = false;
+
+    for (let s = step; s <= 50; s += step) {
+      const minTop = Math.ceil((s * 1.5 + (isPTCG ? 3 : 1)) / step) * step;
+      for (let t = minTop; t <= 50; t += step) {
+        const totalPacks = dist.top * t + dist.sub * s + botMultiplier * bottomPacks;
+        const totalCost = totalPacks * packCost;
+        const currentMargin = ((rev - totalCost) / rev) * 100;
+
+        if (currentMargin >= targetMargin) {
+          if (t + s > bestTop + bestSub || !hasSolution) {
+            bestTop = t; bestSub = s; bestMargin = currentMargin;
+            hasSolution = true;
+          }
+        }
+      }
+    }
+
+    if (!hasSolution) {
+      bestSub = step;
+      bestTop = Math.ceil((step * 1.5 + (isPTCG ? 3 : 1)) / step) * step;
+      const totalPacks = dist.top * bestTop + dist.sub * bestSub + botMultiplier * bottomPacks;
+      bestMargin = rev > 0 ? ((rev - (totalPacks * packCost)) / rev) * 100 : 0;
+    }
+
+    const totalCost = (dist.top * bestTop + dist.sub * bestSub + botMultiplier * bottomPacks) * packCost;
+
+    return { 
+      isPrizeMode: false, top: bestTop, sub: bestSub, bot: bottomPacks, margin: bestMargin, 
+      rev, dist, totalCost, topCost: bestTop * packCost, topValue: bestTop * packPrice 
+    };
+  }, [selectedGame, targetMargin, packCost, packPrice, bottomPacks]);
+
+  const customSpecData = useMemo(() => {
+    // 2P 單挑決鬥
+    const rev2 = 2 * fee2p;
+    const budget2 = rev2 * (1 - targetMargin / 100);
+    let w2 = bottomPacks;
+    for (let i = bottomPacks; i <= 50; i++) {
+      if ((i + bottomPacks) * packCost <= budget2) w2 = i;
+      else break;
+    }
+    if (selectedGame === 'ptcg') w2 = Math.max(bottomPacks, Math.floor(w2 / 3) * 3);
+    const cost2 = (w2 + bottomPacks) * packCost;
+    const margin2 = rev2 > 0 ? ((rev2 - cost2) / rev2) * 100 : 0;
+    const p2 = { w: w2, rev: rev2, cost: cost2, margin: margin2, topCost: w2 * packCost, topValue: w2 * packPrice };
+
+    // 3P 循環賽
+    const rev3 = 3 * fee3p;
+    const budget3 = rev3 * (1 - targetMargin / 100);
+    const step = selectedGame === 'ptcg' ? 3 : 1;
+    let p1_3 = bottomPacks + step;
+    let p2_3 = bottomPacks;
+    let bestSum3 = 0;
+    for (let j = bottomPacks; j <= 50; j += step) {
+      for (let i = j + step; i <= 50; i += step) {
+        if ((i + j + bottomPacks) * packCost <= budget3) {
+          if (i + j > bestSum3) {
+            bestSum3 = i + j;
+            p1_3 = i; p2_3 = j;
+          }
+        }
+      }
+    }
+    if (bestSum3 === 0) { p1_3 = bottomPacks; p2_3 = bottomPacks; }
+    const cost3 = (p1_3 + p2_3 + bottomPacks) * packCost;
+    const margin3 = rev3 > 0 ? ((rev3 - cost3) / rev3) * 100 : 0;
+    const p3 = { p1: p1_3, p2: p2_3, rev: rev3, cost: cost3, margin: margin3, topCost: p1_3 * packCost, topValue: p1_3 * packPrice };
+
+    return {
+      p2,
+      p3,
+      r3: calcCustomFormatPacks(fee3r, 3, 8, r3Mode, r3PrizeCost),
+      r4: calcCustomFormatPacks(fee4r, 4, 16, r4Mode, r4PrizeCost),
+      r5: calcCustomFormatPacks(fee5r, 5, 32, r5Mode, r5PrizeCost),
+    };
+  }, [fee2p, fee3p, fee3r, fee4r, fee5r, r3Mode, r3PrizeCost, r4Mode, r4PrizeCost, r5Mode, r5PrizeCost, calcCustomFormatPacks, targetMargin, packCost, packPrice, bottomPacks, selectedGame]);
+
+  const calculations = useMemo(() => {
+    const isGodMode = rewardModel === 'god';
+    const isPureLottery = rewardModel === 'pure-lottery';
+    const isSmooth = rewardModel === 'smooth';
+    const isGym = rewardModel === 'official-gym';
+    const isCustomSpec = rewardModel === 'custom-spec';
+    const isPTCG = selectedGame === 'ptcg';
+
+    let adjustedGodMid = godMidPacks;
+    let adjustedGodSub = godSubPacks;
+    if (isPTCG) {
+      adjustedGodMid = Math.ceil(godMidPacks / 3) * 3;
+      adjustedGodSub = Math.ceil(godSubPacks / 3) * 3;
+    }
+    const finalGodMid = Math.max(bottomPacks, adjustedGodMid);
+    const finalGodSub = Math.max(finalGodMid, adjustedGodSub);
+
+    const middlePacks = Math.ceil(entryFee / packPrice);
+    
+    let actualMidPacks = middlePacks;
+    let actualLowMidPacks = bottomPacks;
+
+    if (isPTCG) {
+      if (twoWinPolicy === 'half') { actualMidPacks = 6; actualLowMidPacks = 3; } 
+      else { actualMidPacks = 3; actualLowMidPacks = bottomPacks; }
+    } else {
+      actualMidPacks = middlePacks;
+      actualLowMidPacks = twoWinPolicy === 'half' ? Math.max(bottomPacks, Math.floor(middlePacks / 2)) : bottomPacks;
+    }
+
+    const calcSmooth = (players, dist) => {
+      const rev = players * entryFee;
+      const maxCost = rev * (1 - targetMargin / 100);
+      const fixed = (dist.mid * actualMidPacks + dist.lowMid * actualLowMidPacks + dist.bot * bottomPacks) * packCost;
+      const limitPacks = Math.floor((maxCost - fixed) / packCost);
+
+      const step = isPTCG ? 3 : 1;
+      let baseSub = dist.sub > 0 ? Math.ceil((actualMidPacks + 1) / step) * step : 0;
+      let minTopNeeded = dist.sub > 0 ? baseSub + Math.max(step, champGap) : actualMidPacks + Math.max(step, champGap);
+      let top = Math.ceil(minTopNeeded / step) * step;
+      let sub = baseSub;
+
+      let isCorrected = dist.top * top + dist.sub * sub > limitPacks;
+      if (!isCorrected) {
+        while (true) {
+          if (dist.sub > 0 && (dist.top * (top + step) + dist.sub * (sub + step) <= limitPacks) && ((top + step) - (sub + step) >= Math.max(step, champGap))) {
+            top += step; sub += step;
+          } else if (dist.top * (top + step) + dist.sub * sub <= limitPacks) {
+            top += step;
+          } else break;
+        }
+      }
+
+      let originalTop = top; let originalSub = sub;
+      if (topTax > 0) {
+        const taxAmount = topTax * step;
+        top = top - taxAmount;
+        if (sub > 0) sub = sub - taxAmount;
+        
+        if (sub > 0) {
+          sub = Math.max(Math.ceil((actualMidPacks + 1) / step) * step, sub);
+          top = Math.max(sub + Math.max(step, champGap), top);
+        } else {
+          top = Math.max(Math.ceil((actualMidPacks + Math.max(step, champGap)) / step) * step, top);
+        }
+      }
+
+      const taxedPacks = (originalTop - top) * dist.top + (originalSub - sub) * dist.sub;
+      const totalCost = (dist.top * top + dist.sub * sub) * packCost + fixed;
+      return { top, sub, totalCost, margin: ((rev - totalCost) / rev) * 100, isCorrected, taxedPacks, taxedCash: taxedPacks * packCost };
+    };
+
+    const calcGod = (players) => {
+      const rev = players * entryFee;
+      const champBudget = godPrizeConfig[players] || 0;
+      let costX1 = 0; let costX2 = 0; let costBot = 0;
+
+      if (players === 32) { costX1 = 5 * finalGodSub; costX2 = 10 * finalGodMid; costBot = 16 * bottomPacks; } 
+      else if (players === 28) { costX1 = 4 * finalGodSub; costX2 = 9 * finalGodMid; costBot = 14 * bottomPacks; } 
+      else if (players === 24) { costX1 = 4 * finalGodSub; costX2 = 7 * finalGodMid; costBot = 12 * bottomPacks; } 
+      else if (players === 20) { costX1 = 3 * finalGodSub; costX2 = 6 * finalGodMid; costBot = 10 * bottomPacks; } 
+      else if (players === 16) { costX1 = 4 * finalGodSub; costX2 = 6 * finalGodMid; costBot = 5 * bottomPacks; } 
+      else if (players === 12) { costX1 = 3 * finalGodSub; costX2 = 4 * finalGodMid; costBot = 4 * bottomPacks; } 
+      else if (players === 8) { costX1 = 3 * finalGodSub; costX2 = 0; costBot = 4 * bottomPacks; } 
+      else if (players === 4) { costX1 = 1 * finalGodSub; costX2 = 0; costBot = 2 * bottomPacks; }
+
+      const fixedBaseCost = (costX1 + costX2 + costBot) * packCost;
+      const totalCost = champBudget + fixedBaseCost;
+      return { champBudget, maxChampBudget: rev * (1 - targetMargin / 100) - fixedBaseCost, totalCost, margin: ((rev - totalCost) / rev) * 100, suggestedFee: Math.ceil((totalCost / (1 - targetMargin / 100)) / players / 10) * 10 };
+    };
+
+    const calcLottery = (players) => {
+      const rev = players * entryFee;
+      const baseCost = players * fixedLotteryPacks * packCost;
+      const prizeCost = lotteryPrizeConfig[players] || 0; 
+      const totalCost = baseCost + prizeCost;
+      return { totalCost, margin: ((rev - totalCost) / rev) * 100, surplusCash: rev - totalCost - (rev * (targetMargin / 100)), prizeInput: prizeCost, prizeCost };
+    };
+
+    const res4 = isSmooth ? calcSmooth(4, getSwissWorstCaseDist(4, 3)) : isGodMode ? calcGod(4) : calcLottery(4);
+    const res8 = isSmooth ? calcSmooth(8, getSwissWorstCaseDist(8, 3)) : isGodMode ? calcGod(8) : calcLottery(8);
+    const res12 = isSmooth ? calcSmooth(12, getSwissWorstCaseDist(12, 3)) : isGodMode ? calcGod(12) : calcLottery(12);
+    const res16 = isSmooth ? calcSmooth(16, getSwissWorstCaseDist(16, 4)) : isGodMode ? calcGod(16) : calcLottery(16);
+    const res20 = isSmooth ? calcSmooth(20, getSwissWorstCaseDist(20, 5)) : isGodMode ? calcGod(20) : calcLottery(20);
+    const res24 = isSmooth ? calcSmooth(24, getSwissWorstCaseDist(24, 5)) : isGodMode ? calcGod(24) : calcLottery(24);
+    const res28 = isSmooth ? calcSmooth(28, getSwissWorstCaseDist(28, 5)) : isGodMode ? calcGod(28) : calcLottery(28);
+    const res32 = isSmooth ? calcSmooth(32, getSwissWorstCaseDist(32, 5)) : isGodMode ? calcGod(32) : calcLottery(32);
+
+    if (isSmooth) {
+      const step = isPTCG ? 3 : 1;
+      const enforceInternal = (res, dist) => {
+        if (dist.sub > 0) {
+          if (res.sub < Math.ceil((actualMidPacks + 1) / step) * step) res.sub = Math.ceil((actualMidPacks + 1) / step) * step;
+          if (res.top < Math.ceil((res.sub * 2) / step) * step) res.top = Math.ceil((res.sub * 2) / step) * step;
+        } else {
+          if (res.top < Math.ceil((actualMidPacks + Math.max(step, champGap)) / step) * step) res.top = Math.ceil((actualMidPacks + Math.max(step, champGap)) / step) * step;
+        }
+      };
+
+      [res4, res8, res12, res16, res20, res24, res28, res32].forEach((r, i) => {
+        enforceInternal(r, getSwissWorstCaseDist([4, 8, 12, 16, 20, 24, 28, 32][i], i <= 1 ? 3 : i <= 3 ? 4 : 5));
+      });
+
+      if (res8.top < res4.top) res8.top = res4.top;
+      if (res12.top < res8.top + step) res12.top = res8.top + step;
+      if (res16.top < res12.top) res16.top = res12.top;
+      if (res20.top < res16.top + step) res20.top = res16.top + step;
+      if (res24.top < res20.top) res24.top = res20.top;
+      if (res28.top < res24.top) res28.top = res24.top;
+      if (res32.top < res28.top) res32.top = res28.top;
+      if (res16.sub < res12.sub) res16.sub = res12.sub;
+      if (res20.sub < res16.sub) res20.sub = res16.sub;
+      if (res24.sub < res20.sub) res24.sub = res20.sub;
+      if (res28.sub < res24.sub) res28.sub = res24.sub;
+      if (res32.sub < res28.sub) res32.sub = res28.sub;
+
+      [res4, res8, res12, res16, res20, res24, res28, res32].forEach((r, i) => {
+        const p = [4, 8, 12, 16, 20, 24, 28, 32][i];
+        const rounds = p <= 8 ? 3 : p <= 16 ? 4 : 5;
+        enforceInternal(r, getSwissWorstCaseDist(p, rounds));
+        const dist = getSwissWorstCaseDist(p, rounds);
+        r.totalCost = (dist.top * r.top + dist.sub * r.sub) * packCost + (dist.mid * actualMidPacks + dist.lowMid * actualLowMidPacks + dist.bot * bottomPacks) * packCost;
+        r.margin = ((p * entryFee - r.totalCost) / (p * entryFee)) * 100;
+      });
+    }
+
+    const getEventCostAndStats = (P) => {
+      const rev = P * entryFee;
+      const R = matchRounds === 'auto' ? (P <= 8 ? 3 : P <= 16 ? 4 : 5) : Number(matchRounds) || 3;
+      let topReward = 0; let subReward = 0; let midReward = 0;
+
+      if (R === 3) { topReward = res8.top || 0; subReward = isPTCG ? 3 : actualLowMidPacks; } 
+      else if (R === 4) { topReward = res16.top || 0; subReward = res16.sub || 0; } 
+      else { topReward = (P >= 25 ? res32.top : res24.top) || 0; subReward = (P >= 25 ? res32.sub : res24.sub) || 0; midReward = actualMidPacks; }
+
+      const dist = getSwissWorstCaseDist(P, R);
+      const totalCost = (dist.top * topReward + dist.sub * subReward + dist.mid * midReward + dist.lowMid * actualLowMidPacks + dist.bot * bottomPacks) * packCost;
+      return { totalCost, margin: rev > 0 ? ((rev - totalCost) / rev) * 100 : 0, surplus: Math.max(0, rev - totalCost - (rev * targetMargin / 100)), R, suggestedFee: Math.ceil((totalCost / (1 - targetMargin / 100)) / P / 10) * 10 };
+    };
+
+    const getSurplusForPlayerCount = (P) => {
+      const rev = P * entryFee;
+      let totalCost = 0;
+      if (isSmooth) totalCost = getEventCostAndStats(P).totalCost || 0;
+      else if (isGodMode) totalCost = calcGod(P).totalCost || 0;
+      else if (isGym) {
+        if (P === 2) totalCost = (7 + 1) * packCost;
+        else if (P === 3) {
+          const emergencyData = getEmergencyStats();
+          totalCost = (threePlayerMode === 'A' ? (emergencyData.p1_A + emergencyData.p2_A + emergencyData.p3_A) : (emergencyData.p1_B + emergencyData.p2_B + emergencyData.p3_B)) * packCost;
+        } else {
+          let dist = getSwissWorstCaseDist(P, 3);
+          totalCost = (dist.top * 12 + dist.sub * 6 + dist.bot * 1) * packCost;
+        }
+      } else totalCost = calcLottery(P).totalCost || 0;
+      return Math.max(0, rev - totalCost - (rev * (targetMargin / 100)));
+    };
+
+    const getEmergencyStats = () => {
+      const step = isPTCG ? 3 : 1;
+      const rev2 = 2 * entryFee;
+      let baseWinner2 = bottomPacks;
+      const budget2 = rev2 * (1 - targetMargin / 100);
+      for (let w = bottomPacks; w <= 50; w++) if ((w + bottomPacks) * packCost <= budget2) baseWinner2 = w; else break;
+      if (isPTCG) baseWinner2 = Math.max(bottomPacks, Math.floor(baseWinner2 / 3) * 3);
+      
+      const winnerPacks2 = overrideWinner2 !== '' ? Number(overrideWinner2) : baseWinner2;
+      const loserPacks2 = overrideLoser2 !== '' ? Number(overrideLoser2) : bottomPacks;
+      const cost2 = (winnerPacks2 + loserPacks2) * packCost;
+
+      const rev3 = 3 * entryFee;
+      const budget3 = rev3 * (1 - targetMargin / 100);
+      let p1_A = bottomPacks + step; let p2_A = bottomPacks; let bestSumA = 0;
+      for (let j = bottomPacks; j <= 50; j += step) {
+        for (let i = j + step; i <= 50; i += step) {
+          if ((i + j + bottomPacks) * packCost <= budget3 && i + j > bestSumA) { bestSumA = i + j; p1_A = i; p2_A = j; }
+        }
+      }
+      if (bestSumA === 0) { p1_A = bottomPacks; p2_A = bottomPacks; }
+      
+      let p1_B = bottomPacks + step; let p2_B = bottomPacks; let bestSumB = 0;
+      for (let j = bottomPacks; j <= 50; j += step) {
+        for (let i = j + step; i <= 50; i += step) {
+          if ((i + j + bottomPacks) * packCost <= budget3 && i + j > bestSumB) { bestSumB = i + j; p1_B = i; p2_B = j; }
+        }
+      }
+      if (bestSumB === 0) { p1_B = bottomPacks; p2_B = bottomPacks; }
+
+      const p1A_f = overrideP1_A !== '' ? Number(overrideP1_A) : p1_A;
+      const p2A_f = overrideP2_A !== '' ? Number(overrideP2_A) : p2_A;
+      const p3A_f = overrideP3_A !== '' ? Number(overrideP3_A) : bottomPacks;
+      
+      const p1B_f = overrideP1_B !== '' ? Number(overrideP1_B) : p1_B;
+      const p2B_f = overrideP2_B !== '' ? Number(overrideP2_B) : p2_B;
+      const p3B_f = overrideP3_B !== '' ? Number(overrideP3_B) : bottomPacks;
+
+      return {
+        winnerPacks2, loserPacks2, margin2: rev2 > 0 ? ((rev2 - cost2) / rev2) * 100 : 0, rev2, cost2,
+        p1_A: p1A_f, p2_A: p2A_f, p3_A: p3A_f, margin3_A: rev3 > 0 ? ((rev3 - (p1A_f + p2A_f + p3A_f) * packCost) / rev3) * 100 : 0, rev3, cost3_A: (p1A_f + p2A_f + p3A_f) * packCost,
+        p1_B: p1B_f, p2_B: p2B_f, p3_B: p3B_f, margin3_B: rev3 > 0 ? ((rev3 - (p1B_f + p2B_f + p3B_f) * packCost) / rev3) * 100 : 0, cost3_B: (p1B_f + p2B_f + p3B_f) * packCost,
+        tiePacks_A: entryFee === 300 ? 3 : 2, tiePacks_B: entryFee === 300 ? 3 : 2
+      };
+    };
+
+    let gymActiveRev = 0, gymActiveCost = 0, gymActiveMargin = 0, gymActiveSurplus = 0;
+    if (isGym) {
+      const p = currentPlayers >= 2 ? currentPlayers : 12;
+      gymActiveRev = p * 300;
+      let dist = getSwissWorstCaseDist(p, 3);
+      if (p === 2) gymActiveCost = (7 + 1) * packCost;
+      else if (p === 3) gymActiveCost = (9 + 3 + 1) * packCost;
+      else gymActiveCost = (dist.top * 12 + dist.sub * 6 + dist.bot * 1) * packCost;
+      gymActiveMargin = gymActiveRev > 0 ? ((gymActiveRev - gymActiveCost) / gymActiveRev) * 100 : 0;
+      gymActiveSurplus = gymActiveRev - gymActiveCost - (gymActiveRev * (targetMargin/100));
+    }
+
+    const getCustomSpecStressTests = () => {
+      const list = [
+        { p: 2, label: '⚔️ 2人死鬥局 (1輪)', fee: fee2p, rounds: 1, type: 'p2' },
+        { p: 3, label: '🔄 3人循環局 (3輪)', fee: fee3p, rounds: 3, type: 'p3' },
+        { p: 4, label: '3輪常態 (4人)', fee: fee3r, rounds: 3, type: 'r3' },
+        { p: 8, label: '3輪滿編 (8人)', fee: fee3r, rounds: 3, type: 'r3' },
+        { p: 9, label: '⚠️ 4輪高壓 (9人)', fee: fee4r, rounds: 4, type: 'r4' },
+        { p: 12, label: '4輪中堅 (12人)', fee: fee4r, rounds: 4, type: 'r4' },
+        { p: 16, label: '4輪滿編 (16人)', fee: fee4r, rounds: 4, type: 'r4' },
+        { p: 17, label: '⚠️ 5輪高壓 (17人)', fee: fee5r, rounds: 5, type: 'r5' },
+        { p: 24, label: '5輪常態 (24人)', fee: fee5r, rounds: 5, type: 'r5' },
+        { p: 25, label: '⚠️ 5輪高壓 (25人)', fee: fee5r, rounds: 5, type: 'r5' },
+        { p: 32, label: '5輪滿編 (32人)', fee: fee5r, rounds: 5, type: 'r5' },
+      ];
+
+      return list.map(item => {
+        const rev = item.p * item.fee;
+        let cost = 0;
+        if (item.type === 'p2') cost = customSpecData.p2.cost;
+        else if (item.type === 'p3') cost = customSpecData.p3.cost;
+        else {
+          const dist = getSwissWorstCaseDist(item.p, item.rounds);
+          const dataRef = customSpecData[item.type]; 
+          const botMultiplier = dist.mid + dist.lowMid + dist.bot;
+          if (dataRef.isPrizeMode) {
+             cost = dataRef.prizeCost + (dist.sub * dataRef.sub + botMultiplier * bottomPacks) * packCost;
+          } else {
+             cost = (dist.top * dataRef.top + dist.sub * dataRef.sub + botMultiplier * bottomPacks) * packCost;
+          }
+        }
+        return { p: item.p, label: item.label, fee: item.fee, totalCost: cost, margin: rev > 0 ? ((rev - cost) / rev) * 100 : 0, rev, isTarget: true };
+      });
+    };
+
+    const getStressTestsList = () => {
+      if (isCustomSpec) return getCustomSpecStressTests();
+      return (isGym ? [2, 3, 4, 8, 9, 12, 16, 17, 20, 24, 28, 32, 33] : [4, 8, 9, 12, 16, 17, 20, 24, 25, 28, 32, 33]).map(p => {
+        let cost = 0; let margin = 0; let label = "";
+        if (isGym) {
+          const rev = p * 300;
+          let dist = getSwissWorstCaseDist(p, 3);
+          if (p === 2) { cost = (7 + 1) * packCost; label = "2人對決 (1輪)"; } 
+          else if (p === 3) {
+            const emergencyData = getEmergencyStats();
+            cost = (threePlayerMode === 'A' ? (emergencyData.p1_A + emergencyData.p2_A + emergencyData.p3_A) : (emergencyData.p1_B + emergencyData.p2_B + emergencyData.p3_B)) * packCost;
+            label = "3人循環 (3輪)";
+          } else {
+            cost = (dist.top * 12 + dist.sub * 6 + dist.bot * 1) * packCost;
+            label = [9, 17, 33].includes(p) ? `⚠️ ${p}人局 (3輪高壓輪空點)` : `${p}人常態賽 (3輪)`;
+          }
+          margin = rev > 0 ? ((rev - cost) / rev) * 100 : 0;
+        } else {
+          const R = matchRounds === 'auto' ? (p <= 8 ? 3 : p <= 16 ? 4 : 5) : Number(matchRounds) || 3;
+          if (isSmooth) { const stats = getEventCostAndStats(p); cost = stats.totalCost; margin = stats.margin; } 
+          else if (isGodMode) {
+            const dist = getSwissWorstCaseDist(p, R);
+            cost = dist.top * (godPrizeConfig[p] || godPrizeConfig[closestStandard(p)] || 0) + (dist.sub * finalGodSub + dist.mid * finalGodMid + dist.lowMid * (R === 4 ? finalGodMid : bottomPacks) + dist.bot * bottomPacks) * packCost;
+            margin = ((p * entryFee - cost) / (p * entryFee)) * 100;
+          } else {
+            cost = p * fixedLotteryPacks * packCost + (lotteryPrizeConfig[p] || lotteryPrizeConfig[closestStandard(p)] || 0);
+            margin = ((p * entryFee - cost) / (p * entryFee)) * 100;
+          }
+          label = [9, 17, 25, 33].includes(p) ? `⚠️ ${p}人局 (${R}輪高壓輪空點)` : `${p}人局 (${R}輪)`;
+        }
+        return { p, label, totalCost: cost, margin, isTarget: p >= 4 };
+      });
+    };
+
+    const alertData = { hasAlert: false, type: null, data: [] };
+
+    if (isSmooth || isCustomSpec) {
+      const testList = isCustomSpec ? getCustomSpecStressTests() : [4, 8, 12, 16, 20, 24, 28, 32].map(p => ({ p, r: getEventCostAndStats(p) }));
+      testList.forEach((item) => {
+        const margin = isCustomSpec ? item.margin : item.r.margin;
+        if (margin < targetMargin - 0.5) {
+          alertData.data.push(isCustomSpec 
+            ? { p: item.p, r: { R: item.label, margin, suggestedFee: item.fee + 50 }, label: item.label } 
+            : item
+          );
+        }
+      });
+      if (alertData.data.length > 0) { alertData.hasAlert = true; alertData.type = 'smooth_low_margin'; }
+    }
+
+    return {
+      isGym, isGodMode, isPureLottery, isSmooth, isCustomSpec, isPTCG,
+      actualMidPacks, actualLowMidPacks, finalGodMid, finalGodSub,
+      res4, res8, res12, res16, res20, res24, res28, res32,
+      surplus8: getSurplusForPlayerCount(8), surplus16: getSurplusForPlayerCount(16), surplus24: getSurplusForPlayerCount(24), surplus32: getSurplusForPlayerCount(32),
+      getEventCostAndStats, getEmergencyStats: getEmergencyStats(), stressTests: getStressTestsList(),
+      gymActiveStats: { rev: gymActiveRev, cost: gymActiveCost, margin: gymActiveMargin, surplus: Math.max(0, gymActiveSurplus) },
+      alertData, advice: { text: '目前配置極佳，利潤結構平穩安全。', color: 'text-slate-300' },
+    };
+  }, [
+    entryFee, targetMargin, packCost, packPrice, bottomPacks, rewardModel, twoWinPolicy, champGap, topTax,
+    godPrizeConfig, godMidPacks, godSubPacks, fixedLotteryPacks, lotteryPrizeConfig, selectedGame, matchRounds,
+    currentPlayers, overrideWinner2, overrideLoser2, overrideP1_A, overrideP2_A, overrideP3_A, overrideP1_B, overrideP2_B, overrideP3_B,
+    threePlayerMode, fee2p, fee3p, fee3r, fee4r, fee5r, customSpecData
+  ]);
+
+  const inputClass = 'w-full border border-slate-300 px-2 py-1.5 rounded bg-white text-slate-800 text-xs sm:text-sm font-semibold focus:ring-1 focus:ring-teal-500/50 outline-none transition-all truncate';
+  const labelClass = 'block text-[11px] font-bold text-slate-500 mb-0.5 whitespace-nowrap';
+
+  const reverseCalculatorSuggestions = useMemo(() => {
+    const cost = Number(grandPrizeCost); const targetM = Number(grandPrizeMinMargin);
+    if (isNaN(cost) || isNaN(targetM) || cost <= 0) return [];
+
+    return [200, 250, 300, 400].map(fee => {
+      const calcMin = (rounds, sc) => {
+        const dist = getSwissWorstCaseDist(sc, rounds);
+        const packsPerPlayer = (dist.sub * calculations.finalGodSub + dist.mid * calculations.finalGodMid + dist.lowMid * (rounds === 4 ? calculations.finalGodMid : bottomPacks) + dist.bot * bottomPacks) / sc;
+        const denominator = fee * (1 - targetM / 100) - packsPerPlayer * packCost;
+        return denominator <= 0 ? 999 : Math.max(sc, Math.ceil(cost / denominator));
+      };
+      const p3 = calcMin(3, 8); const p4 = calcMin(4, 16); const p5 = calcMin(5, 32);
+      return { fee, p3, p4, p5 };
+    });
+  }, [grandPrizeCost, grandPrizeMinMargin, calculations.finalGodSub, calculations.finalGodMid, bottomPacks, packCost]);
+
+  const renderStressTestRow = (t) => (
+    <tr key={t.label} className="hover:bg-slate-100 transition-colors border-b border-slate-100/50 bg-white font-bold text-slate-800">
+      <td className="py-2 px-3 text-left">
+        <span className="text-xs">{t.label}</span>
+        {Number(t.margin) >= targetMargin + 5 && <span className="ml-1.5 inline-block text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded shadow-sm font-bold animate-pulse">利潤極佳 ✨</span>}
+      </td>
+      <td className="py-2 px-2 text-xs">${t.rev || t.p * entryFee}</td>
+      <td className="py-2 px-2 text-xs text-rose-500">-${t.totalCost?.toFixed(0)}</td>
+      <td className={`py-2 px-2 font-bold text-xs ${Number(t.margin) >= targetMargin ? 'text-teal-600' : 'text-rose-600'}`}>
+        {Number(t.margin).toFixed(1)}%
+      </td>
+    </tr>
+  );
+
+  const getPTCGGuide = (rewardText) => {
+    if (selectedGame !== 'ptcg') return '';
+    const match = String(rewardText).match(/^(\d+)\s*包/);
+    if (match) {
+      const packs = parseInt(match[1], 10);
+      if (packs % 3 === 0 && packs > 0) return `(可換 ${packs / 3} 包高級包)`;
+    }
+    return '';
+  };
+
+  const getTableCellValue = (rank, roundKey) => {
+    const isSmooth = rewardModel === 'smooth';
+    const isGod = rewardModel === 'god';
+    const isLottery = rewardModel === 'pure-lottery';
+    const { res8, res16, res24, res32 } = calculations;
+
+    if (rank === '5勝') {
+      if (roundKey === '3' || roundKey === '4') return '-';
+      if (roundKey === '5_normal') return isSmooth ? `${res24.top || 0} 包` : isGod ? `$${godPrizeConfig[24] || 0}` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '5_special') return isSmooth ? `${res32.top || 0} 包` : isGod ? `$${godPrizeConfig[32] || 0}` : `${fixedLotteryPacks} 包`;
+    }
+    if (rank === '4勝') {
+      if (roundKey === '3') return '-';
+      if (roundKey === '4') return isSmooth ? `${res16.top || 0} 包` : isGod ? `$${godPrizeConfig[16] || 0}` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '5_normal') return isSmooth ? `${res24.sub || 0} 包` : isGod ? `${calculations.finalGodSub || 0} 包` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '5_special') return isSmooth ? `${res32.sub || 0} 包` : isGod ? `${calculations.finalGodSub || 0} 包` : `${fixedLotteryPacks} 包`;
+    }
+    if (rank === '3勝') {
+      if (roundKey === '3') return isSmooth ? `${res8.top || 0} 包` : isGod ? `$${godPrizeConfig[8] || 0}` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '4') return isSmooth ? `${res16.sub || 0} 包` : isGod ? `${calculations.finalGodSub || 0} 包` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '5_normal') return isSmooth ? `${calculations.actualMidPacks || 0} 包` : isGod ? `${calculations.finalGodMid || 0} 包` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '5_special') return isSmooth ? `${calculations.actualMidPacks || 0} 包` : isGod ? `${calculations.finalGodMid || 0} 包` : `${fixedLotteryPacks} 包`;
+    }
+    if (rank === '2勝') {
+      if (roundKey === '3') return isSmooth ? `${calculations.actualMidPacks || 0} 包` : isGod ? `${calculations.finalGodSub || 0} 包` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '4') return isSmooth ? `${calculations.actualLowMidPacks || 0} 包` : isGod ? `${calculations.finalGodMid || 0} 包` : `${fixedLotteryPacks} 包`;
+      if (roundKey === '5_normal' || roundKey === '5_special') return isSmooth ? `${calculations.actualLowMidPacks || 0} 包` : isGod ? `${bottomPacks} 包` : `${fixedLotteryPacks} 包`;
+    }
+    if (rank === '1~0勝') return isLottery ? `${fixedLotteryPacks} 包` : `${bottomPacks} 包`;
+    return '-';
+  };
+
+  const renderTableCell = (rank, roundKey) => {
+    const val = getTableCellValue(rank, roundKey);
+    if (val === '-') return <span className="text-slate-300">-</span>;
+
+    const isGod = rewardModel === 'god';
+    const isLottery = rewardModel === 'pure-lottery';
+    const isCash = val.startsWith('$');
+    let style = { text: 'text-slate-800', bg: 'bg-white' };
+
+    if (isCash) style = { text: 'text-rose-700 text-sm sm:text-base font-black', bg: 'bg-rose-50 border border-rose-100/60 px-2 py-0.5 rounded shadow-sm' };
+    else if (rank === '5勝') style = { text: 'text-amber-700 text-sm sm:text-base font-black', bg: 'bg-amber-50 border border-amber-200 px-2 py-0.5 rounded shadow-sm' };
+    else if (rank === '4勝') style = { text: 'text-blue-700 text-sm sm:text-base font-bold', bg: 'bg-blue-50 border border-blue-150 px-2 py-0.5 rounded shadow-sm' };
+    else if (rank === '3勝') style = { text: 'text-teal-700 font-bold', bg: 'bg-teal-50 border border-teal-100/80 px-1.5 py-0.5 rounded' };
+    else if (rank === '2勝') style = { text: 'text-pink-600 font-semibold', bg: 'bg-pink-50 border border-pink-100/50 px-1.5 py-0.5 rounded' };
+    else if (rank === '1~0勝') style = { text: 'text-slate-500 font-medium', bg: 'bg-slate-100 border border-slate-200/50 px-1.5 py-0.5 rounded' };
+
+    return (
+      <div className="flex flex-col items-center py-1">
+        <span className={`${style.text} ${style.bg}`}>{val}</span>
+        {getPTCGGuide(val) && <span className="text-xs text-slate-950 font-black mt-1 whitespace-nowrap">{getPTCGGuide(val).replace(/[()]/g, '')}</span>}
+        {isCash && isGod && (
+          <span className="text-[10px] text-rose-500 bg-rose-50 border border-rose-100/50 px-1 rounded-sm mt-0.5 whitespace-nowrap font-semibold scale-90">
+            {roundKey === '5_normal' && rank === '5勝' && "24人滿編 (21~23人降級)"}
+            {roundKey === '5_special' && rank === '5勝' && "32人滿編 (29~31人降級)"}
+            {roundKey === '4' && rank === '4勝' && "16人滿編 (13~15人降級)"}
+            {roundKey === '3' && rank === '3勝' && "8人滿編 (5~7人降級)"}
+          </span>
+        )}
+        {isLottery && rank === '5勝' && <span className="text-xs text-slate-950 font-black mt-1 whitespace-nowrap">{roundKey === '5_normal' && `+ 抽獎 $${lotteryPrizeConfig[24] || 0}`}{roundKey === '5_special' && `+ 抽獎 $${lotteryPrizeConfig[32] || 0}`}</span>}
+        {isLottery && rank === '4勝' && roundKey === '4' && <span className="text-xs text-slate-950 font-black mt-1 whitespace-nowrap font-medium">{`+ 抽獎 $${lotteryPrizeConfig[16] || 0}`}</span>}
+        {isLottery && rank === '3勝' && roundKey === '3' && <span className="text-xs text-slate-950 font-black mt-1 whitespace-nowrap font-medium">{`+ 抽獎 $${lotteryPrizeConfig[8] || 0}`}</span>}
+      </div>
+    );
+  };
+
+  const singleRewards = useMemo(() => {
+    let top = "-"; let sub = "-"; let mid = "-"; let lowMid = "-"; let bot = bottomPacks; let topLottery = ""; 
+    const { res8, res16, res24, res32 } = calculations;
+
+    if (rewardModel === 'smooth') {
+      if (matchRounds === '3') { top = `${res8.top || 0} 包`; sub = `${selectedGame === 'ptcg' ? 3 : (calculations.actualLowMidPacks || 0)} 包`; } 
+      else if (matchRounds === '4') { top = `${res16.top || 0} 包`; sub = `${res16.sub || 0} 包`; } 
+      else if (matchRounds === '5') { top = `${res24.top || 0} 包`; sub = `${res24.sub || 0} 包`; mid = `${calculations.actualMidPacks || 0} 包`; }
+    } else if (rewardModel === 'god') {
+      if (matchRounds === '3') { top = `$${godPrizeConfig[8] || 0}`; sub = `${calculations.finalGodSub || 0} 包`; } 
+      else if (matchRounds === '4') { top = `$${godPrizeConfig[16] || 0}`; sub = `${calculations.finalGodSub || 0} 包`; } 
+      else if (matchRounds === '5') { top = `$${godPrizeConfig[24] || 0}`; sub = `${calculations.finalGodSub || 0} 包`; mid = `${calculations.finalGodMid || 0} 包`; }
+    } else if (rewardModel === 'pure-lottery') {
+      bot = fixedLotteryPacks; lowMid = `${fixedLotteryPacks} 包`; mid = `${fixedLotteryPacks} 包`; sub = `${fixedLotteryPacks} 包`; top = `${fixedLotteryPacks} 包`;
+      if (matchRounds === '3') topLottery = `+ 抽獎 $${lotteryPrizeConfig[8] || 0}`;
+      else if (matchRounds === '4') topLottery = `+ 抽獎 $${lotteryPrizeConfig[16] || 0}`;
+      else if (matchRounds === '5') topLottery = `+ 抽獎 $${lotteryPrizeConfig[24] || 0}`;
+    }
+    return { top, sub, mid, lowMid, bot, topLottery };
+  }, [rewardModel, matchRounds, calculations, bottomPacks, fixedLotteryPacks, lotteryPrizeConfig, godPrizeConfig, selectedGame]);
+
+  const emergency = calculations.getEmergencyStats; 
+  const showPlayersInput = rewardModel !== 'official-gym' && rewardModel !== 'custom-spec' && matchRounds !== 'auto';
+
+  const renderModeToggle = (mode, setMode, theme) => (
+    <div className="flex bg-slate-100 p-0.5 rounded-md mb-2 mt-1">
+      <button onClick={() => setMode('pack')} className={`flex-1 text-[10px] font-bold py-1 rounded transition-colors ${mode === 'pack' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400 hover:text-slate-600'}`}>⚡ 補充包</button>
+      <button onClick={() => setMode('prize')} className={`flex-1 text-[10px] font-bold py-1 rounded transition-colors ${mode === 'prize' ? `bg-white shadow-sm text-${theme}-600` : 'text-slate-400 hover:text-slate-600'}`}>🎁 實體大獎</button>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen lg:h-screen w-full bg-slate-100 p-2.5 flex flex-col gap-2.5 font-sans text-slate-800 overflow-y-auto lg:overflow-hidden box-border">
+      <style>{`.hide-scrollbar::-webkit-scrollbar { display: none; } .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }`}</style>
+
+      {/* 標頭 Header */}
+      <div className={`shrink-0 px-4 py-2.5 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center text-white gap-3 sm:gap-0 transition-colors duration-500 ${rewardModel === 'official-gym' ? 'bg-indigo-800' : rewardModel === 'custom-spec' ? 'bg-indigo-950' : calculations.isSmooth ? 'bg-teal-700' : calculations.isGodMode ? 'bg-rose-800' : 'bg-pink-600'}`}>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-xl font-bold tracking-wider whitespace-nowrap">怪獸造咔 🦖 v9.9.11</h1>
+          <span className="text-white/80 text-xs hidden sm:inline-block">
+            {rewardModel === 'official-gym' ? '🔵 方案四：寶可夢官方道館賽 (固定3輪里程碑)' : rewardModel === 'custom-spec' ? '🏆 方案五：怪獸雙軌規格賽 (全景自訂定價手冊)' : calculations.isSmooth ? '🟢 方案一：日常平滑 (勝場發包)' : calculations.isGodMode ? '🔴 方案二：旗艦大賽 (冠軍高額獎金 + 智慧自訂逆推)' : '💖 方案三：同樂樂透 (保底+大抽獎)'}
+          </span>
+        </div>
+        
+        <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
+          <div className="flex items-center gap-1 bg-white/10 backdrop-blur-sm p-1 rounded-md border border-white/10 text-xs shadow-inner">
+            <span className="opacity-80 px-1 select-none">🔍 字型縮放:</span>
+            <button onClick={() => setZoomLevel(Math.max(85, zoomLevel - 10))} className="w-6 h-6 rounded bg-white/20 hover:bg-white/30 text-white font-extrabold flex items-center justify-center active:scale-95">-</button>
+            <span className="font-bold w-12 text-center select-none text-white">{zoomLevel}%</span>
+            <button onClick={() => setZoomLevel(Math.min(145, zoomLevel + 10))} className="w-6 h-6 rounded bg-white/20 hover:bg-white/30 text-white font-extrabold flex items-center justify-center active:scale-95">+</button>
+            {zoomLevel !== 100 && <button onClick={() => setZoomLevel(100)} className="text-[10px] bg-white/30 hover:bg-white/40 px-1.5 py-0.5 rounded leading-none text-white font-medium">重設</button>}
+          </div>
+
+          <div className="text-right whitespace-nowrap leading-none shrink-0">
+            {rewardModel === 'custom-spec' ? <div className="bg-white/20 text-white px-2 py-1 rounded text-xs font-black border border-white/30 tracking-widest mt-1">獨立手冊模式</div> : <><span className="text-[10px] opacity-80 block leading-none mb-0.5">預設報名費</span><span className="text-xl font-bold leading-none">${entryFee}</span></>}
           </div>
         </div>
-      </nav>
+      </div>
 
-      <main className="max-w-6xl mx-auto p-4 space-y-6 mt-4 transition-all duration-300">
-        {/* ========================================== */}
-        {/* 玩家看版 (Player View) */}
-        {/* ========================================== */}
-        {currentView === 'player' && (
-          <div className="space-y-5 animate-in fade-in duration-500">
-            <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-2"><Swords className="w-6 h-6 text-orange-500" /> 近期熱血賽事 🔥</h2>
-                <p className="text-sm text-gray-500 font-bold flex items-center gap-1"><MapPin className="w-4 h-4" /> 台中市南區光輝街113號</p>
+      {/* 控制面板 */}
+      <div className="shrink-0 bg-white p-3 rounded-lg shadow-sm border border-slate-200 flex flex-col gap-2.5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
+          <div className="lg:col-span-3 w-full">
+            <label className={labelClass}>🏆 賽事產品線</label>
+            <select value={rewardModel} onChange={(e) => setRewardModel(e.target.value)} className={`w-full p-1.5 rounded-md border-2 text-xs font-bold focus:outline-none transition-all ${rewardModel === 'official-gym' ? 'border-indigo-400 bg-indigo-50 text-indigo-950' : rewardModel === 'custom-spec' ? 'border-indigo-600 bg-indigo-950/5 text-indigo-950' : calculations.isSmooth ? 'border-teal-300 bg-teal-50 text-teal-900' : calculations.isGodMode ? 'border-rose-300 bg-rose-50 text-rose-900' : 'border-pink-300 bg-pink-50 text-pink-900'}`}>
+              <option value="smooth">🟢 方案一：日常平滑 (勝場發包)</option>
+              <option value="god">🔴 方案二：旗艦大賽 (冠軍降級領獎)</option>
+              <option value="pure-lottery">💖 方案三：同樂樂透 (滿編大抽獎)</option>
+              <option value="official-gym">🔵 方案四：寶可夢官方道館賽 (3輪里程碑)</option>
+              <option value="custom-spec">🏆 方案五：怪獸雙軌規格賽 (定價自訂手冊)</option>
+            </select>
+          </div>
+
+          <div className="lg:col-span-9 grid grid-cols-2 sm:grid-cols-6 lg:grid-cols-12 gap-2 w-full">
+            <div className="col-span-2">
+              <label className={labelClass}>遊戲</label>
+              <select value={selectedGame} onChange={handleGameChange} className={`${inputClass} ${rewardModel === 'official-gym' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`} disabled={rewardModel === 'official-gym'}>
+                {Object.entries(GAME_DATABASE).map(([id, game]) => <option key={id} value={id}>{game.name}</option>)}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className={labelClass}>預設包價</label>
+              <select value={selectedGame === 'ptcg' ? 0 : selectedPackIndex} onChange={handlePackChange} className={`${inputClass} ${(selectedGame === 'ptcg' || rewardModel === 'official-gym') ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`} disabled={selectedGame === 'ptcg' || rewardModel === 'official-gym'}>
+                {GAME_DATABASE[selectedGame].packs.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
+              </select>
+            </div>
+            
+            <div className="col-span-2">
+              <label className={`${labelClass} text-indigo-600 font-extrabold`}>⏱️ 對戰輪數</label>
+              <select value={matchRounds} onChange={(e) => setMatchRounds(e.target.value)} className={`${inputClass} border-indigo-300 font-extrabold ${rewardModel === 'official-gym' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-indigo-50/30 text-indigo-900'}`} disabled={rewardModel === 'official-gym'}>
+                <option value="auto">⏱️ 自動 (依人數開賽)</option>
+                <option value="3">⏱️ 固定 3 輪</option>
+                <option value="4">⏱️ 固定 4 輪</option>
+                <option value="5">⏱️ 固定 5 輪</option>
+              </select>
+            </div>
+
+            <div className="col-span-1">
+              <label className={labelClass}>成本($)</label>
+              <input type="number" step="0.01" min="0" value={packCost} onChange={(e) => setPackCost(Number(e.target.value))} className={`${inputClass} text-rose-700 bg-rose-50/40`} disabled={rewardModel === 'official-gym'} />
+            </div>
+            <div className="col-span-1">
+              <label className={labelClass}>售價($)</label>
+              <input type="number" step="1" min="1" value={packPrice} onChange={(e) => setPackPrice(Number(e.target.value))} className={`${inputClass} text-teal-700 bg-teal-50/40`} disabled={rewardModel === 'official-gym'} />
+            </div>
+            
+            {rewardModel === 'custom-spec' ? (
+              <div className="col-span-1 bg-indigo-950/10 rounded px-1.5 py-0.5 border border-indigo-950/20 text-center flex flex-col justify-center h-full select-none animate-in fade-in">
+                <span className="text-[9px] font-black text-indigo-900 leading-none mb-0.5">🔒 獨立自訂</span>
+                <span className="text-xs font-black text-indigo-950 leading-none">全景手冊</span>
               </div>
-              
-              <div className="flex bg-gray-200 p-1.5 rounded-xl md:w-64">
-                <button onClick={() => setViewMode('list')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'list' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><LayoutList className="w-4 h-4 inline mr-1" /> 列表</button>
-                <button onClick={() => setViewMode('calendar')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'calendar' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Calendar className="w-4 h-4 inline mr-1" /> 行事曆</button>
+            ) : (
+              <div className="col-span-1">
+                <label className={labelClass}>預設報名費</label>
+                <input type="number" step="50" value={entryFee} onChange={(e) => setEntryFee(Number(e.target.value))} className={inputClass} disabled={rewardModel === 'official-gym'} />
+              </div>
+            )}
+
+            <div className="col-span-1">
+              <label className={labelClass}>目標毛利(%)</label>
+              <input type="number" value={targetMargin} onChange={(e) => setTargetMargin(Number(e.target.value))} className={`${inputClass} text-blue-700 bg-blue-50/50`} />
+            </div>
+            <div className="col-span-1">
+              <label className={labelClass}>底線(%)</label>
+              <input type="number" value={minMargin} onChange={(e) => setMinMargin(Number(e.target.value))} className={`${inputClass} text-rose-700 bg-rose-50/50`} />
+            </div>
+            
+            {rewardModel === 'official-gym' ? (
+              <div className="col-span-1 bg-indigo-50 rounded px-1.5 py-0.5 border border-indigo-200 text-center flex flex-col justify-center h-full select-none animate-in fade-in"><span className="text-[9px] font-black text-indigo-800 leading-none mb-0.5">🔒 官方規格</span><span className="text-xs font-black text-indigo-950 leading-none">強鎖 3 輪</span></div>
+            ) : rewardModel === 'custom-spec' ? (
+              <div className="col-span-1 bg-indigo-950/10 rounded px-1.5 py-0.5 border border-indigo-950/20 text-center flex flex-col justify-center h-full select-none animate-in fade-in"><span className="text-[9px] font-black text-indigo-900 leading-none mb-0.5">🏆 雙軌規格賽</span><span className="text-xs font-black text-indigo-950 leading-none">全景定價</span></div>
+            ) : showPlayersInput ? (
+              <div className="col-span-1 bg-amber-50 rounded px-1.5 py-0.5 border border-amber-200 animate-in fade-in"><label className="block text-[10px] font-black text-amber-800 leading-none mb-1">👥 當前人數</label><input type="number" min="2" max="100" value={currentPlayers} onChange={(e) => setCurrentPlayers(Math.max(2, Number(e.target.value)))} className="w-full text-center border border-amber-300 rounded bg-white text-slate-800 text-xs sm:text-sm font-black p-0.5 focus:ring-1 focus:ring-amber-500" /></div>
+            ) : (
+              <div className="col-span-1 bg-teal-50 rounded px-1.5 py-0.5 border border-teal-200 animate-in fade-in"><label className="block text-[10px] font-black text-teal-800 leading-none mb-1">🛡️ 最低保底</label><input type="number" min="1" value={bottomPacks} onChange={(e) => setBottomPacks(Math.max(1, Number(e.target.value)))} className="w-full text-center border border-teal-300 rounded bg-white text-slate-800 text-xs sm:text-sm font-black p-0.5 focus:ring-1 focus:ring-teal-500" /></div>
+            )}
+          </div>
+        </div>
+
+        {calculations.isSmooth && (
+          <div className="bg-teal-50/50 px-3 py-1.5 rounded-md border border-teal-100 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2"><span className="text-xs sm:text-sm font-bold text-teal-800 whitespace-nowrap">2勝政策:</span><select value={twoWinPolicy} onChange={(e) => setTwoWinPolicy(e.target.value)} className={`${inputClass} w-24 sm:w-28 py-1 text-xs`}><option value="half">半血回本</option><option value="bottom">併入保底</option></select></div><div className="h-4 w-px bg-teal-200 hidden sm:block"></div>
+            <div className="flex items-center gap-2"><span className="text-xs sm:text-sm font-bold text-teal-800 whitespace-nowrap">落差:</span><select value={champGap} onChange={(e) => setChampGap(Number(e.target.value))} className={`${inputClass} w-20 py-1 text-xs`}><option value={1}>1 包</option><option value={2}>2 包</option></select></div><div className="h-4 w-px bg-teal-200 hidden sm:block"></div>
+            <div className="flex items-center gap-2"><span className="text-xs sm:text-sm font-bold text-teal-800 whitespace-nowrap">提撥轉餘額:</span><select value={topTax} onChange={(e) => setTopTax(Number(e.target.value))} className={`${inputClass} w-36 py-1 text-xs`}><option value={0}>0包 (不扣留)</option><option value={1}>-1包 (小額備用)</option><option value={2}>-2包 (擴大備用)</option></select></div>
+          </div>
+        )}
+
+        {/* V9.9.11 方案二：大賽成本逆推自訂計算機與一鍵實戰模組 */}
+        {calculations.isGodMode && (
+          <div className="bg-rose-50/50 px-3 py-1.5 rounded-md border border-rose-100 flex flex-col gap-2.5">
+            <div className="bg-white p-3 rounded-lg border border-rose-200 shadow-sm flex flex-col xl:flex-row gap-4 items-center justify-between">
+              <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                <span className="text-sm font-black text-rose-950 flex items-center gap-1.5 shrink-0 select-none"><span className="text-lg">🤖</span><span>大賽成本逆推自訂計算機</span></span>
+                <div className="flex items-center gap-1"><span className="text-xs font-semibold text-slate-500">冠軍大獎死成本:</span><input type="number" step="100" value={grandPrizeCost} onChange={(e) => setGrandPrizeCost(Math.max(0, Number(e.target.value)))} className="w-20 text-center border border-rose-300 bg-rose-50/20 rounded p-1 text-xs sm:text-sm font-black text-rose-700" /><span className="text-xs font-semibold text-slate-500">元</span></div>
+                <div className="flex items-center gap-1"><span className="text-xs font-semibold text-slate-500">最低毛利底線:</span><input type="number" value={grandPrizeMinMargin} onChange={(e) => setGrandPrizeMinMargin(Math.max(0, Math.min(99, Number(e.target.value))))} className="w-14 text-center border border-rose-300 bg-rose-50/20 rounded p-1 text-xs sm:text-sm font-black text-rose-700" /><span className="text-xs font-semibold text-slate-500">%</span></div>
+              </div>
+              <div className="flex flex-wrap gap-2 w-full xl:w-auto justify-end">
+                {reverseCalculatorSuggestions.map(s => (
+                  <div key={s.fee} className="bg-rose-50/30 border border-rose-100 rounded p-1.5 text-center min-w-[150px] shadow-sm">
+                    <span className="block text-xs font-black text-rose-900 leading-none mb-1 border-b border-rose-100/50 pb-1">🎫 門票 ${s.fee} 時</span>
+                    <div className="flex flex-col gap-1 text-[10px] sm:text-xs">
+                      <div className="flex justify-between items-center bg-white px-1 py-0.5 rounded border border-rose-50"><span className="font-semibold text-slate-600">3輪: <b className="text-rose-700">{s.p3 > 100 ? "無法回本" : `${s.p3}人`}</b></span>{s.p3 <= 100 && <button onClick={() => applyReverseConfig(s.fee, s.p3)} className="bg-rose-600 hover:bg-rose-700 text-white text-[9px] px-1.5 py-0.5 rounded transition-colors">套用</button>}</div>
+                      <div className="flex justify-between items-center bg-white px-1 py-0.5 rounded border border-rose-50"><span className="font-semibold text-slate-600">4輪: <b className="text-rose-700">{s.p4 > 100 ? "無法回本" : `${s.p4}人`}</b></span>{s.p4 <= 100 && <button onClick={() => applyReverseConfig(s.fee, s.p4)} className="bg-rose-600 hover:bg-rose-700 text-white text-[9px] px-1.5 py-0.5 rounded transition-colors">套用</button>}</div>
+                      <div className="flex justify-between items-center bg-white px-1 py-0.5 rounded border border-rose-50"><span className="font-semibold text-slate-600">5輪: <b className="text-rose-700">{s.p5 > 100 ? "無法回本" : `${s.p5}人`}</b></span>{s.p5 <= 100 && <button onClick={() => applyReverseConfig(s.fee, s.p5)} className="bg-rose-600 hover:bg-rose-700 text-white text-[9px] px-1.5 py-0.5 rounded transition-colors">套用</button>}</div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className="flex flex-col gap-3">
-              <style>{`.hide-scrollbar::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }`}</style>
-              
-              <div className="flex flex-col md:flex-row gap-3 px-1 mb-1 items-start md:items-center justify-between">
-                <div className="w-full md:w-auto text-xs md:text-sm font-black text-orange-700 bg-gradient-to-r from-orange-100 to-orange-50 border border-orange-200 px-4 py-2 rounded-xl flex items-center justify-center md:justify-start shadow-sm animate-[pulse_3s_ease-in-out_infinite]">
-                  <Info className="w-4 h-4 mr-1.5 shrink-0 text-orange-500" />
-                  點擊下方標籤，可「多選」篩選想看的遊戲喔！
-                </div>
-
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink-0">
-                  🎓 點我快速預約【新手教學】 👉
+            <div className="bg-rose-50/60 p-3 rounded-lg border border-rose-100 mt-1">
+              <div className="flex items-center gap-2 mb-2 border-b border-rose-100 pb-1">
+                <span className="text-sm font-black text-rose-900">💡 系統推薦大賽模組 (一鍵自動帶入參數)：</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                <button onClick={() => applyPresetEvent(400, 4, 16)} className="bg-white border border-rose-200 hover:border-rose-400 hover:shadow-md p-2 rounded-lg text-left transition-all group">
+                  <span className="block text-xs font-bold text-rose-700 group-hover:text-rose-800">🚀 載入 16 人：高保底大賽模組</span>
+                  <span className="block text-[10px] text-slate-500 mt-1">門票 $400 / 保底 4 包 / 冠軍發 ${grandPrizeCost}</span>
+                </button>
+                <button onClick={() => applyPresetEvent(250, 1, 24)} className="bg-white border border-rose-200 hover:border-rose-400 hover:shadow-md p-2 rounded-lg text-left transition-all group">
+                  <span className="block text-xs font-bold text-rose-700 group-hover:text-rose-800">🚀 載入 24 人：中階挑戰賽模組</span>
+                  <span className="block text-[10px] text-slate-500 mt-1">門票 $250 / 保底 1 包 / 冠軍發 ${grandPrizeCost}</span>
+                </button>
+                <button onClick={() => applyPresetEvent(200, 1, 32)} className="bg-white border border-rose-200 hover:border-rose-400 hover:shadow-md p-2 rounded-lg text-left transition-all group">
+                  <span className="block text-xs font-bold text-rose-700 group-hover:text-rose-800">🚀 載入 32 人：滿編爭霸賽模組</span>
+                  <span className="block text-[10px] text-slate-500 mt-1">門票 $200 / 保底 1 包 / 冠軍發 ${grandPrizeCost}</span>
+                </button>
+                <button onClick={resetGodMode} className="bg-slate-100 border border-slate-300 hover:bg-slate-200 hover:shadow-md p-2 rounded-lg text-left transition-all">
+                  <span className="block text-xs font-bold text-slate-700">🔄 清除大獎，恢復預設狀態</span>
+                  <span className="block text-[10px] text-slate-500 mt-1">清空特別獎金，回歸日常門票</span>
                 </button>
               </div>
-
-              <div className="flex items-center gap-1 w-full mt-1">
-                <button onClick={() => categoryScrollRef.current?.scrollBy({ left: -200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 md:w-12 md:h-12 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center hover:bg-orange-50 active:scale-95 transition-all"><ChevronLeft className="w-5 h-5 md:w-6 md:h-6 -ml-0.5" /></button>
-                <div ref={categoryScrollRef} className="flex-1 flex gap-2 overflow-x-auto pb-2 pt-1 px-1 hide-scrollbar scroll-smooth">
-                  {[{ id: 'All', label: '全部', color: 'bg-white border-gray-300' }, ...categories.map(c => ({ id: c.gameType, label: c.label, color: c.color }))].map(cat => (
-                    <button key={cat.id} onClick={() => togglePlayerFilter(cat.id)} className={`whitespace-nowrap px-4 md:px-6 py-2 md:py-2.5 rounded-full text-sm md:text-base font-black transition-all shadow-sm text-black ${cat.color} ${playerFilters.includes(cat.id) ? 'ring-2 ring-black ring-offset-2 scale-105 opacity-100' : 'opacity-60 hover:opacity-100'}`}>{cat.label}</button>
-                  ))}
-                </div>
-                <button onClick={() => categoryScrollRef.current?.scrollBy({ left: 200, behavior: 'smooth' })} className="flex-shrink-0 w-9 h-9 md:w-12 md:h-12 bg-white shadow-sm rounded-full text-orange-600 border border-gray-200 flex items-center justify-center hover:bg-orange-50 active:scale-95 transition-all"><ChevronRight className="w-5 h-5 md:w-6 md:h-6 -mr-0.5" /></button>
-              </div>
             </div>
 
-            {viewMode === 'list' && (() => {
-              const startOfToday = new Date();
-              startOfToday.setHours(0, 0, 0, 0);
-              const next = new Date(startOfToday); 
-              next.setDate(next.getDate() + 14);
-
-              const list = tournaments.filter(t => { 
-                if (!t.date) return false;
-                const parts = t.date.split('-');
-                const d = new Date(parts[0], parts[1] - 1, parts[2]);
-                return d >= startOfToday && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); 
-              });
-              
-              const upcomingClosures = [];
-              for (let i = 0; i <= 14; i++) {
-                const checkDate = new Date(startOfToday);
-                checkDate.setDate(checkDate.getDate() + i);
-                const ds = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
-                const cObj = getClosureObj(ds);
-                if (cObj) {
-                  upcomingClosures.push({ date: ds, reason: cObj.reason, isClosure: true });
-                }
-              }
-
-              const grouped = {};
-              list.forEach(t => {
-                if (!grouped[t.date]) grouped[t.date] = { isClosure: false, reason: '', events: [] };
-                grouped[t.date].events.push(t);
-              });
-              
-              upcomingClosures.forEach(c => {
-                if (!grouped[c.date]) grouped[c.date] = { isClosure: true, reason: c.reason, events: [] };
-                else {
-                  grouped[c.date].isClosure = true;
-                  grouped[c.date].reason = c.reason;
-                }
-              });
-
-              const sortedDates = Object.keys(grouped).sort();
-
-              return sortedDates.length === 0 ? (
-                <div className="text-center py-12 text-gray-400 font-bold bg-white rounded-2xl border-dashed border-2 border-gray-200">未來 14 天內尚未安排賽事喔！😆</div>
-              ) : (
-                <div className="flex flex-col gap-6 px-1 py-2 pb-10">
-                  {sortedDates.map((date, index) => {
-                    const dayData = grouped[date];
-                    const isCollapsed = collapsedDates[date] !== undefined ? collapsedDates[date] : (index !== 0 || dayData.isClosure);
-                    const dayGameTypes = [...new Set(dayData.events.map(e => e.gameType))];
-
-                    if (dayData.isClosure) {
-                      return (
-                        <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-gray-100 overflow-hidden opacity-90 flex items-center justify-between px-5 py-4 md:px-6 md:py-5">
-                          <div className="flex items-center gap-3">
-                            <Calendar className="w-5 h-5 md:w-6 md:h-6 text-gray-400 shrink-0" />
-                            <span className="font-black text-gray-500 text-lg md:text-xl tracking-wide line-through decoration-gray-400 shrink-0">{formatEventDate(date)}</span>
-                          </div>
-                          <div className="bg-gray-200/80 text-gray-600 font-black px-3 md:px-4 py-1.5 md:py-2 rounded-lg flex items-center justify-end gap-2 text-sm md:text-base shadow-inner min-w-0">
-                            <Coffee className="w-4 h-4 md:w-5 md:h-5 shrink-0" /> 
-                            <span className="truncate">{dayData.reason}</span>
-                          </div>
-                        </div>
-                      );
-                    }
-
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5 mt-2">
+              <div className="flex flex-wrap gap-x-3 gap-y-1 items-center flex-1 min-w-[280px]">
+                <span className="text-xs font-bold text-rose-950 whitespace-nowrap">🏆 滿編大獎 ($):</span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 flex-1">
+                  {[4, 8, 12, 16, 20, 24, 28, 32].map((p) => {
+                    const limit = Math.floor(p === 4 ? calculations.res4.maxChampBudget : p === 8 ? calculations.res8.maxChampBudget : p === 12 ? calculations.res12.maxChampBudget : p === 16 ? calculations.res16.maxChampBudget : p === 20 ? calculations.res20.maxChampBudget : p === 24 ? calculations.res24.maxChampBudget : p === 28 ? calculations.res28.maxChampBudget : calculations.res32.maxChampBudget);
                     return (
-                      <div key={date} className="relative rounded-2xl border border-gray-200 shadow-sm bg-white overflow-hidden transition-all duration-300">
-                        
-                        <div 
-                          className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-200 px-4 md:px-6 py-4 md:py-5 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors group"
-                          onClick={() => toggleDateCollapse(date)}
-                        >
-                          <div className="flex items-center gap-3 flex-wrap flex-1 min-w-0 pr-2">
-                            <div className="flex items-center gap-2 shrink-0">
-                              <Calendar className="w-5 h-5 md:w-6 md:h-6 text-orange-600 group-hover:scale-110 transition-transform" />
-                              <span className="font-black text-orange-900 text-lg md:text-xl tracking-wide">{formatEventDate(date)}</span>
-                            </div>
-                            
-                            {dayGameTypes.length > 0 && (
-                              <div className="flex items-center flex-wrap gap-1.5 md:gap-2 ml-0 sm:ml-3">
-                                {dayGameTypes.map(type => <GameBadge key={type} type={type} size="md" />)}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className={`flex items-center gap-1.5 md:gap-2 bg-white border border-gray-200 px-3 py-1.5 md:px-4 md:py-2 rounded-full shadow-sm group-hover:border-orange-300 group-hover:bg-orange-50 transition-all shrink-0 ml-1`}>
-                            <span className="text-xs md:text-sm font-black text-gray-500 group-hover:text-orange-600 whitespace-nowrap">
-                              {isCollapsed ? '點擊展開' : '收合'}
-                            </span>
-                            <ChevronDown className={`w-4 h-4 md:w-5 md:h-5 text-gray-400 group-hover:text-orange-600 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`} />
-                          </div>
-                        </div>
-                        
-                        {!isCollapsed && (
-                          <div className="p-4 md:p-6 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
-                            <div className="flex flex-col gap-3 md:gap-4">
-                              {dayData.events.map(t => {
-                                const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
-                                const isExpanded = expandedNotes[t.id];
-
-                                return (
-                                  <div 
-                                    key={t.id} 
-                                    className={`group rounded-xl md:rounded-2xl border border-gray-200 bg-white transition-all duration-300 ${hasDetails ? 'cursor-pointer hover:border-orange-400 hover:shadow-md hover:bg-orange-50/40' : ''}`} 
-                                    onClick={(e) => hasDetails && toggleNote(e, t.id)}
-                                  >
-                                    <div className="p-4 md:p-6 flex flex-row items-center gap-3 md:gap-6 relative">
-                                      
-                                      <div className="shrink-0 w-14 md:w-20 text-center">
-                                        <span className="text-xl md:text-3xl font-black text-orange-600 tracking-tighter drop-shadow-sm">{t.time}</span>
-                                      </div>
-                                      
-                                      <div className="hidden md:block w-1 h-12 bg-gray-100 rounded-full shrink-0"></div>
-                                      
-                                      <div className="flex-1 min-w-0 py-1">
-                                        <div className="flex items-center flex-wrap gap-2 mb-1.5 md:mb-2">
-                                          <GameBadge type={t.gameType} />
-                                          <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500"/>方案：{t.fee}</span>
-                                        </div>
-                                        <h4 className="font-black text-gray-800 text-base md:text-xl leading-snug break-words pr-2">{t.title}</h4>
-                                      </div>
-
-                                      {hasDetails && (
-                                        <div className="shrink-0 pl-1 flex flex-col items-center justify-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
-                                          <div className={`w-9 h-9 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-colors shadow-sm border ${isExpanded ? 'bg-orange-100 border-orange-300 text-orange-600' : 'bg-gray-50 border-gray-200 text-gray-400 group-hover:bg-orange-50 group-hover:border-orange-300 group-hover:text-orange-500'}`}>
-                                            {isExpanded ? <ChevronUp className="w-5 h-5 md:w-6 md:h-6" /> : <ChevronDown className="w-5 h-5 md:w-6 md:h-6" />}
-                                          </div>
-                                          <span className={`text-[10px] md:text-xs font-black ${isExpanded ? 'text-orange-600' : 'text-gray-400 group-hover:text-orange-500'}`}>
-                                            {isExpanded ? '收起' : '詳情'}
-                                          </span>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {isExpanded && (
-                                      <div className="px-4 md:px-6 pb-5 md:pb-6 animate-in slide-in-from-top-2 duration-300 cursor-default" onClick={(e) => e.stopPropagation()}>
-                                        <div className="pt-4 md:pt-5 border-t border-gray-100">
-                                          <ImageCarousel tournament={t} />
-                                          <div className="text-sm md:text-base text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 md:p-5 rounded-xl border border-gray-100 shadow-sm">{renderTextWithLinks(t.description)}</div>
-                                          
-                                          {t.prizeImages && t.prizeImages.length > 0 && (
-                                            <div className="mt-4 md:mt-5 p-4 md:p-5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                              <div className="text-sm md:text-base font-black text-orange-800 mb-3 md:mb-4 flex items-center gap-1.5">
-                                                <Gift className="w-5 h-5 md:w-6 md:h-6 text-orange-500" /> 豪華獎勵一覽
-                                              </div>
-                                              <div className={`grid gap-3 md:gap-4 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
-                                                {t.prizeImages.map((img, i) => (
-                                                  <img 
-                                                    key={`prize-img-${i}`} 
-                                                    src={img} 
-                                                    alt={`豪華獎品 ${i+1}`} 
-                                                    className="w-full h-auto rounded-xl border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                                    onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                                  />
-                                                ))}
-                                              </div>
-                                            </div>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
+                      <div key={p} className="min-w-[65px] flex flex-col justify-end">
+                        <div className="flex items-baseline justify-between w-full mb-1 text-[clamp(0.68rem,0.9vw,0.85rem)] leading-none whitespace-nowrap gap-1"><span className="text-rose-900 font-extrabold shrink-0">{p}人</span><span className="text-rose-500 font-bold truncate">上限:${limit}</span></div>
+                        <input type="number" step="50" value={godPrizeConfig[p] || ''} onChange={(e) => setGodPrizeConfig(prev => ({ ...prev, [p]: Number(e.target.value) }))} className={`${inputClass} text-center text-rose-700 py-0.5 text-xs font-bold`} />
                       </div>
                     );
                   })}
                 </div>
-              );
-            })()}
-
-            {/* 玩家版：行事曆 */}
-            {viewMode === 'calendar' && (
-              <div className="bg-white rounded-2xl p-5 md:p-8 shadow-sm border border-gray-200">
-                <div className="flex justify-between items-center mb-6">
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-6 h-6"/></button>
-                    <h3 className="font-black text-xl text-gray-800 w-28 text-center">{currentMonth.getMonth()+1}月</h3>
-                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-6 h-6"/></button>
-                  </div>
-                  <button onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)} className="text-xs md:text-sm font-bold text-gray-500 hover:text-orange-600 bg-gray-50 hover:bg-orange-50 px-4 py-2 rounded-lg border border-gray-200 transition-colors">改以「{weekStartsOnMonday ? '週日' : '週一'}」為起始</button>
-                </div>
-                
-                <div className="grid grid-cols-7 gap-1 md:gap-3 mb-2 text-center text-xs md:text-base font-black text-gray-400">
-                  {weekHeaders.map(h => <div key={h}>{h}</div>)}
-                </div>
-                
-                <div className="grid grid-cols-7 gap-1 md:gap-3">
-                  {(() => {
-                    const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
-                    const dCount = new Date(y, m + 1, 0).getDate();
-                    const fDay = new Date(y, m, 1).getDay();
-                    const adj = weekStartsOnMonday ? (fDay === 0 ? 6 : fDay - 1) : fDay;
-                    const cells = [];
-                    for (let i = 0; i < adj; i++) cells.push(<div key={`e-${i}`} className="h-12 md:h-20"></div>);
-                    for (let d = 1; d <= dCount; d++) {
-                      const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                      const events = tournaments.filter(t => t.date === ds && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
-                      const isToday = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
-                      const closureObj = getClosureObj(ds);
-
-                      cells.push(
-                        <button key={ds} onClick={() => setSelectedDate(selectedDate === ds ? null : ds)} className={`relative h-14 md:h-24 flex flex-col items-center justify-center rounded-xl border transition-all ${selectedDate === ds ? 'bg-orange-100 border-orange-500 shadow-inner md:scale-105' : isToday ? 'bg-gray-100 border-gray-300' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50'} ${closureObj ? 'bg-gray-100/50 opacity-70' : ''}`}>
-                          <span className={`text-sm md:text-lg font-bold ${closureObj ? 'text-gray-400 line-through' : events.length > 0 ? 'text-gray-800' : 'text-gray-400'}`}>{d}</span>
-                          {closureObj ? (
-                            <div className="mt-1 text-[9px] md:text-xs font-black text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded truncate max-w-[90%] flex items-center gap-1"><Coffee className="w-3 h-3 hidden md:block" /> {closureObj.reason}</div>
-                          ) : events.length > 0 && (
-                            <div className="flex gap-1 md:gap-1.5 mt-1">
-                              {events.slice(0, 3).map((e, i) => {
-                                const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
-                                return <span key={i} className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full ${getDotColor(catColor)} shadow-sm`} />
-                              })}
-                              {events.length > 3 && <span className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-black shadow-sm" />}
-                            </div>
-                          )}
-                        </button>
-                      );
-                    }
-                    return cells;
-                  })()}
-                </div>
-
-                {selectedDate && (
-                  <div className="mt-8 pt-6 border-t border-gray-100">
-                    <h4 className="font-black text-gray-700 text-lg flex items-center gap-2 mb-4"><Calendar className="w-6 h-6 text-orange-500" /> {selectedDate.replace(/-/g, '/')} 賽事清單</h4>
-                    
-                    {getClosureObj(selectedDate) ? (
-                      <div className="bg-gray-50 p-8 rounded-2xl text-center border-2 border-gray-200 border-dashed flex flex-col items-center justify-center">
-                        <Coffee className="w-12 h-12 text-gray-400 mb-3" />
-                        <h3 className="text-xl font-black text-gray-700 mb-1">{getClosureObj(selectedDate).reason}</h3>
-                        <p className="text-sm font-bold text-gray-500">今日基地沒有營業喔，別白跑一趟！</p>
-                      </div>
-                    ) : tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).length === 0 ? (
-                      <p className="text-sm text-gray-400 font-bold bg-gray-50 p-6 rounded-xl text-center border border-gray-100 border-dashed">這天沒有安排賽事喔！</p>
-                    ) : (
-                      <div className="flex flex-col gap-4">
-                        {tournaments.filter(t => t.date === selectedDate && (playerFilters.includes('All') || playerFilters.includes(t.gameType))).map(t => (
-                          <div key={t.id} className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm hover:border-orange-300 hover:shadow-md transition-all">
-                            <div className="flex flex-col md:flex-row md:items-center gap-4 justify-between">
-                              <div className="flex items-start md:items-center gap-4 flex-1">
-                                <div className="bg-orange-100 text-orange-700 font-black text-lg md:text-xl px-4 py-2 rounded-xl shrink-0 text-center shadow-inner min-w-[85px]">
-                                  {t.time}
-                                </div>
-                                <div className="flex-1">
-                                  <div className="mb-1.5 flex items-center gap-2">
-                                    <GameBadge type={t.gameType} />
-                                    <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
-                                  </div>
-                                  <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
-                                </div>
-                              </div>
-
-                              {((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim())) && (
-                                <button type="button" onClick={(e) => toggleNote(e, t.id)} className={`w-full md:w-auto text-sm font-black px-5 py-3 rounded-xl border active:scale-95 transition-all shrink-0 ${expandedNotes[t.id] ? 'bg-gray-100 text-gray-600 border-gray-200' : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100 hover:shadow-sm'}`}>
-                                  {expandedNotes[t.id] ? '▲ 收起詳情' : '▼ 查看詳情'}
-                                </button>
-                              )}
-                            </div>
-
-                            {expandedNotes[t.id] && (
-                              <div className="mt-4 pt-4 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
-                                <ImageCarousel tournament={t} />
-                                <div className="text-sm text-gray-700 whitespace-pre-line font-bold leading-relaxed bg-gray-50 p-4 rounded-xl border border-gray-100">{renderTextWithLinks(t.description)}</div>
-                                
-                                {t.prizeImages && t.prizeImages.length > 0 && (
-                                  <div className="mt-4 p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                    <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5">
-                                      <Gift className="w-4 h-4 text-orange-500" /> 本場豪華獎勵一覽
-                                    </div>
-                                    <div className={`grid gap-3 ${t.prizeImages.length === 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
-                                      {t.prizeImages.map((img, i) => (
-                                        <img 
-                                          key={`prize-img-${i}`} 
-                                          src={img} 
-                                          alt={`豪華獎品 ${i+1}`} 
-                                          className="w-full h-auto rounded-xl border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" 
-                                          onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }}
-                                        />
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
-            )}
-            
-            <div id="tutorial-section" className="bg-white rounded-2xl p-5 md:p-8 shadow-sm border border-orange-200 relative overflow-hidden mt-8">
-              <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-4 py-2 rounded-bl-2xl shadow-sm">新手福利區</div>
-              <h2 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-2 mb-6"><BookOpen className="w-6 h-6 md:w-8 md:h-8 text-orange-500" /> 預約新手教學 🎓</h2>
-              
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                <div className="w-full">
-                  <div className="px-1 mb-3">
-                    <span className="text-[10px] md:text-xs font-bold text-orange-600 bg-orange-50 border border-orange-100 px-3 py-1 rounded-md inline-flex items-center gap-1 shadow-sm">
-                      💡 點擊兩側圖片切換，點擊中央放大！
-                    </span>
-                  </div>
-                  <TutorialCarousel banners={tutorialBanners} tutorialIdx={tutorialIdx} setTutorialIdx={setTutorialIdx} />
-                </div>
-
-                <div className="space-y-5 bg-orange-50 p-6 md:p-8 rounded-2xl border border-orange-100 shadow-sm">
-                  <div>
-                    <p className="text-sm md:text-base text-gray-800 font-black mb-3 flex items-center gap-2"><span className="bg-orange-500 text-white px-2.5 py-0.5 rounded-lg text-sm shadow-sm">1</span> 建議先看影片 📺</p>
-                    <a href="https://lin.ee/n9FQFBB" target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 w-full px-5 py-4 bg-[#06C755] text-white font-black rounded-xl shadow-md hover:bg-[#05b34c] hover:-translate-y-1 active:scale-95 transition-all text-base"><MessageCircle className="w-6 h-6" /> 觀看 LINE 教學影片</a>
-                  </div>
-                  
-                  <div className="border-t-2 border-orange-200/50 pt-5">
-                    <p className="text-sm md:text-base text-gray-800 font-black mb-2 flex items-center gap-2"><span className="bg-orange-500 text-white px-2.5 py-0.5 rounded-lg text-sm shadow-sm">2</span> 再填表預約 👇</p>
-                    <p className="text-xs md:text-sm text-gray-600 font-bold ml-9 mb-4">看完影片還有疑問？直接填表預約店長親自教學！</p>
-                    
-                    {reserveSuccess ? (
-                      <div className="bg-green-50 p-6 rounded-xl text-center border border-green-200 shadow-inner animate-pulse">
-                        <CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-3" />
-                        <div className="text-green-700 font-black text-xl mb-2">預約已送出！🎉</div>
-                        <div className="text-green-600 text-sm font-bold mb-5">我們會盡快為您安排。<br/>如需再次預約，請稍候片刻...</div>
-                        <a href="https://lin.ee/n9FQFBB" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-6 py-3 bg-[#06C755] text-white font-black rounded-full shadow-md hover:bg-[#05b34c] hover:scale-105 transition-all"><MessageCircle className="w-5 h-5" /> 前往官方 LINE 聯繫</a>
-                      </div>
-                    ) : (
-                      <form onSubmit={handleReserveSubmit} className="space-y-4">
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5">想學哪款遊戲？</label><select required value={reserveForm.gameType} onChange={e => setReserveForm({...reserveForm, gameType: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-xs font-bold text-gray-600 block mb-1.5">希望日期</label>
-                            <input required type="date" value={reserveForm.date} onChange={e => { 
-                              const val = e.target.value; 
-                              const closureObj = getClosureObj(val); 
-                              if(closureObj) { 
-                                showToast(`⛔ 拍謝啦！這天基地剛好【${closureObj.reason}】，請改約其他天喔！`); 
-                                setReserveForm({...reserveForm, date: ''}); 
-                              } else { 
-                                setReserveForm({...reserveForm, date: val}); 
-                              } 
-                            }} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-gray-600 block mb-1.5">希望時間 (13:00~21:00)</label>
-                            <input required type="time" min="13:00" max="21:00" value={reserveForm.time} onChange={e => { const t = e.target.value; if(t && (t < '13:00' || t > '21:00')) { showToast('⏰ 教學時間為 13:00~21:00，請重新選擇！'); setReserveForm({...reserveForm, time: ''}); } else { setReserveForm({...reserveForm, time: t}); } }} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" />
-                          </div>
-                        </div>
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><User className="w-4 h-4"/> 您的暱稱</label><input required type="text" placeholder="怎麼稱呼您呢" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><Phone className="w-4 h-4"/> 聯絡方式</label><input required type="text" placeholder="LINE ID 或 手機號碼" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
-                        <button type="submit" disabled={isSendingLine} className="w-full py-4 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all mt-2 text-lg flex items-center justify-center gap-2">{isSendingLine ? '⏳ 傳送中，請稍候...' : '送出預約！🚀'}</button>
-                      </form>
-                    )}
-                  </div>
+              <div className="flex gap-3 items-center border-t sm:border-t-0 sm:border-l border-rose-200 pt-1.5 sm:pt-0 sm:pl-6">
+                <span className="text-xs sm:text-sm font-bold text-rose-950 whitespace-nowrap">🔪 陪榜包數:</span>
+                <div className="flex gap-2">
+                  <div className="w-14"><span className="text-[0.68rem] font-bold text-rose-600 block text-center leading-none mb-0.5">X-2 中堅</span><input type="number" min={bottomPacks} value={godMidPacks} onChange={(e) => setGodMidPacks(Number(e.target.value))} className={`${inputClass} text-center py-0.5 text-xs`} /></div>
+                  <div className="w-14"><span className="text-[0.68rem] font-bold text-rose-600 block text-center leading-none mb-0.5">X-1 亞軍</span><input type="number" min={godMidPacks} value={godSubPacks} onChange={(e) => setGodSubPacks(Number(e.target.value))} className={`${inputClass} text-center py-0.5 text-xs`} /></div>
                 </div>
               </div>
             </div>
-            <div className="text-center text-sm font-bold text-gray-400 mt-8 mb-4 tracking-widest">※ 報名請私訊怪獸造咔粉專或現場報名 ※</div>
           </div>
         )}
 
-        {/* ========================================== */}
-        {/* 店家後台 (Admin View) */}
-        {/* ========================================== */}
-        {currentView === 'admin' && (
-          <div className="space-y-6">
-            {!isAdminAuth ? (
-              <div className="max-w-md mx-auto bg-white rounded-2xl p-8 shadow-sm border border-gray-200 text-center mt-10">
-                <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner"><Lock className="w-10 h-10 text-orange-600" /></div>
-                <h2 className="text-2xl font-black text-gray-800 mb-2">店長密碼驗證</h2>
-                <p className="text-sm text-gray-500 mb-6 font-bold">請輸入專屬密碼以解鎖基地後台</p>
-                <form onSubmit={handleAdminLogin} className="space-y-4">
-                  <input type="password" placeholder="請輸入密碼..." className={`w-full p-4 border rounded-xl text-center font-bold focus:ring-2 focus:ring-orange-500 outline-none transition-colors ${pwdError ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50'}`} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setPwdError(false); }} />
-                  {pwdError && <p className="text-red-500 text-sm font-bold animate-pulse">密碼錯誤，請重新輸入！</p>}
-                  <button type="submit" className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all">登入管理後台</button>
-                </form>
+        {calculations.isPureLottery && (
+          <div className="bg-pink-50/50 px-3 py-1.5 rounded-md border border-pink-100 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2 bg-white px-3 py-1 rounded border border-pink-100 shadow-inner text-[0.68rem] sm:text-xs">
+              <span className="font-extrabold text-pink-900 mr-1 flex items-center gap-1 shrink-0"><span>⚡</span> 等差智慧產生器:</span>
+              <span className="text-slate-400 font-medium">設定</span><select value={lotteryHelperA} onChange={(e) => setLotteryHelperA(Number(e.target.value))} className="border border-slate-200 rounded px-1 py-0.5 font-bold text-slate-700 bg-slate-50">{[8,12,16,20,24,28,32].map(n => <option key={n} value={n}>{n}人</option>)}</select>
+              <span className="text-slate-400 font-medium">為 $</span><input type="number" step="50" value={lotteryHelperValA} onChange={(e) => setLotteryHelperValA(Number(e.target.value))} className="w-16 border border-slate-200 rounded px-1 py-0.5 text-center font-bold text-pink-700 bg-pink-50/30" />
+              <span className="text-slate-400 font-medium">且</span><select value={lotteryHelperB} onChange={(e) => setLotteryHelperB(Number(e.target.value))} className="border border-slate-200 rounded px-1 py-0.5 font-bold text-slate-700 bg-slate-50">{[8,12,16,20,24,28,32].map(n => <option key={n} value={n}>{n}人</option>)}</select>
+              <span className="text-slate-400 font-medium">為 $</span><input type="number" step="50" value={lotteryHelperValB} onChange={(e) => setLotteryHelperValB(Number(e.target.value))} className="w-16 border border-slate-200 rounded px-1 py-0.5 text-center font-bold text-pink-700 bg-pink-50/30" />
+              <button onClick={() => applyLinearTrend('lottery', lotteryHelperA, lotteryHelperValA, lotteryHelperB, lotteryHelperValB)} className="bg-pink-700 hover:bg-pink-800 text-white font-bold px-2 py-0.5 rounded shadow-sm transition-colors cursor-pointer ml-auto">👉 立即生成等差預算</button>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <div className="flex items-center gap-2"><span className="text-xs sm:text-sm font-bold text-pink-900 whitespace-nowrap">全體保底參加獎:</span><input type="number" min="1" value={fixedLotteryPacks} onChange={(e) => setFixedLotteryPacks(Number(e.target.value))} className={`${inputClass} w-14 py-0.5 text-center text-xs`} /></div>
+              <div className="flex-1 flex flex-wrap gap-x-3 gap-y-1 items-center border-t xl:border-t-0 xl:border-l border-pink-200 pt-1.5 xl:pt-0 xl:pl-6 min-w-[240px]">
+                <span className="text-xs sm:text-sm font-bold text-pink-950 whitespace-nowrap">🎁 達標樂透池 ($):</span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 flex-1">
+                  {[8, 12, 16, 20, 24, 28, 32].map((p) => {
+                    const limit = Math.floor((p * entryFee) * (1 - targetMargin / 100) - (p * fixedLotteryPacks * packCost));
+                    return (
+                      <div key={p} className="min-w-[60px] flex flex-col justify-end">
+                        <div className="flex items-baseline justify-between w-full mb-1 text-[clamp(0.68rem,0.9vw,0.85rem)] leading-none whitespace-nowrap gap-1"><span className="text-[10px] text-pink-800 block font-bold leading-none">{p === 32 ? '32人' : `${p}人`}</span><span className="text-pink-500 font-bold truncate">上限:${Math.max(0, limit)}</span></div>
+                        <input type="number" step="50" value={lotteryPrizeConfig[p] || ''} onChange={(e) => setLotteryPrizeConfig(prev => ({ ...prev, [p]: Number(e.target.value) }))} className={`${inputClass} text-center text-pink-700 py-0.5 text-xs font-bold`} />
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            ) : (
-              <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
-                <div className="flex justify-between items-center bg-orange-100 p-5 md:p-6 rounded-2xl border border-orange-200 shadow-sm">
-                  <span className="font-black text-orange-800 flex items-center gap-2 text-xl md:text-2xl"><Store className="w-6 h-6 md:w-8 md:h-8" /> 基地後台指揮中心</span>
-                  <button onClick={() => setIsAdminAuth(false)} className="bg-white text-orange-600 p-2.5 md:p-3 rounded-xl shadow-sm hover:bg-orange-50 active:scale-90 transition-all font-bold flex items-center gap-2">
-                    <LogOut className="w-5 h-5 md:w-6 md:h-6" /> <span className="hidden md:inline">登出</span>
-                  </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-2.5">
+        <div className="flex-[3] flex flex-col gap-2.5 min-w-0 min-h-0">
+          
+          {rewardModel === 'custom-spec' ? (
+            <div className="flex-1 overflow-hidden bg-slate-50/20 p-3 rounded-lg border border-slate-200 flex flex-col gap-3">
+              <div className="bg-indigo-950 text-white rounded-lg p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0 shadow-md shrink-0">
+                <div>
+                  <h2 className="text-lg font-black flex items-center gap-2 select-none"><span>🏆</span><span>怪獸雙軌規格賽 (全景自適應定價手冊)</span></h2>
+                  <p className="text-[11px] text-white/80 font-semibold mt-1">店長！此模式允許為五大常用賽制單獨微調報名費，系統將自動套用 <b>1.5倍強等差</b> 確保冠軍體感，並死守 <b>{targetMargin}% 目標毛利</b> 防線！</p>
                 </div>
+                <div className="bg-white/10 backdrop-blur border border-white/20 px-3 py-1.5 rounded-lg text-center shrink-0">
+                  <span className="text-[10px] block opacity-80 leading-none">全球統一保底</span><span className="text-base font-black leading-none">{bottomPacks} 包</span>
+                </div>
+              </div>
+
+              {/* V9.9.8 全景響應式網格 (不再出現捲軸) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 flex-1 items-start overflow-y-auto pr-1">
                 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div className="bg-green-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="text-lg md:text-xl flex items-center gap-2"><Send className="w-6 h-6" /> Google 試算表連動測試</span>
-                      <button onClick={() => sendLineNotification({}, true)} disabled={isSendingLine} className="bg-white text-green-700 px-4 py-2.5 rounded-xl text-sm shadow-sm hover:bg-green-50 active:scale-95 transition-all">
-                        {isSendingLine ? '診斷中...' : '發送測試通知'}
-                      </button>
-                    </div>
-                    <p className="text-xs md:text-sm opacity-90 leading-relaxed font-bold">※ 點擊按鈕測試是否能將資料送達您綁定的 Google 試算表與 LINE 群組。</p>
+                {/* 1. 雙人死鬥死決 */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3.5 flex flex-col hover:shadow transition-shadow">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-2">
+                    <span className="font-black text-sm text-slate-800 flex items-center gap-1"><span className="text-lg">⚔️</span> 2人死鬥賽</span>
+                    <span className="text-[10px] bg-rose-50 border border-rose-200 text-rose-800 font-extrabold px-1.5 py-0.5 rounded-full">突發局</span>
                   </div>
-
-                  <div className="bg-blue-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="text-lg md:text-xl flex items-center gap-2">🚀 系統連線狀態</span>
-                      <Sparkles className="w-8 h-8 animate-pulse text-yellow-300" />
+                  <FeeController value={fee2p} onChange={setFee2p} theme="rose" />
+                  <div className="space-y-2.5 text-xs sm:text-sm flex-1 mt-1">
+                    <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                      <span className="font-bold text-slate-700">🥇 1勝0敗：</span>
+                      <div className="text-right">
+                        <span className="font-black text-amber-700 text-sm">{customSpecData.p2.w} 包</span>
+                        {getPTCGGuide(customSpecData.p2.w + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(customSpecData.p2.w + " 包").replace(/[()]/g, '')}</span>}
+                        <div className="text-[9px] text-slate-400 font-bold mt-1">(成本: ${customSpecData.p2.topCost?.toFixed(0)} / 售價: ${customSpecData.p2.topValue?.toFixed(0)})</div>
+                      </div>
                     </div>
-                    <p className="text-xs md:text-sm opacity-90 leading-relaxed font-bold">※ 資料庫與認證權限已同步。大螢幕模式已開啟，提供最佳管理視野。</p>
+                    <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                      <span className="font-medium text-slate-500">🥈 0勝1敗：</span><span className="font-bold text-slate-600">{bottomPacks} 包 (保底)</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                  <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-gray-200">
-                      <h2 className="text-xl md:text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><Plus className="w-6 h-6 md:w-8 md:h-8 text-orange-500" /> 發布新賽事情報</h2>
-                      <form onSubmit={handleAddTournament} className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                          <div><label className="text-sm font-bold text-gray-600 block mb-2">遊戲種類</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.gameType} onChange={e => setFormData({...formData, gameType: e.target.value})}>{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
-                          <div><label className="text-sm font-bold text-gray-600 block mb-2">賽事名稱</label><input required type="text" placeholder="例如：奪包賽" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} /></div>
-                        </div>
-                        
-                        <div className="bg-orange-50 p-5 rounded-2xl border border-orange-100 shadow-inner">
-                          <div className="flex justify-between items-center mb-4"><label className="text-base font-black text-orange-800">🗓️ 場次日期與時間</label><button type="button" onClick={() => setSchedules([...schedules, { date: '', time: '19:00' }])} className="text-sm font-bold text-orange-700 bg-white px-4 py-2 rounded-xl shadow-sm border border-orange-200 hover:bg-orange-100 active:scale-95 transition-all flex items-center gap-1"><Plus className="w-4 h-4" /> 加場次</button></div>
-                          <div className="space-y-3">{schedules.map((sch, i) => (
-                            <div key={i} className="flex gap-3 items-center">
-                              <input required type="date" className="flex-1 p-3.5 border border-gray-300 rounded-xl bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={sch.date} onChange={e => { const ns = [...schedules]; ns[i].date = e.target.value; setSchedules(ns); }} />
-                              <input required type="time" className="w-40 p-3.5 border border-gray-300 rounded-xl bg-white text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={sch.time} onChange={e => { const ns = [...schedules]; ns[i].time = e.target.value; setSchedules(ns); }} />
-                              {schedules.length > 1 && <button type="button" onClick={() => setSchedules(schedules.filter((_, idx) => idx !== i))} className="p-3.5 text-red-400 hover:text-red-600 bg-white rounded-xl border border-red-100 shadow-sm"><Trash2 className="w-5 h-5"/></button>}
-                            </div>
-                          ))}</div>
-                        </div>
-
-                        <div><label className="text-sm font-bold text-gray-600 block mb-2">報名費或方案</label><input required type="text" placeholder="例如: 200元 或 買2包" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.fee} onChange={e => setFormData({...formData, fee: e.target.value})} /></div>
-                        
-                        <div>
-                          <label className="text-sm font-bold text-gray-600 block mb-2">備註與賽制說明</label>
-                          <div className="mb-4 p-5 bg-orange-50 border border-orange-100 rounded-xl shadow-inner">
-                            <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-2"><BookmarkPlus className="w-5 h-5"/> 快捷備註模板管理</div>
-                            {notePresets.length > 0 ? (
-                              <div className="flex flex-wrap gap-2 mb-5">
-                                {notePresets.map(p => (
-                                  <div key={p.id} className="flex items-center gap-1 bg-white border border-orange-200 rounded-lg px-3 py-1.5 shadow-sm hover:border-orange-400 transition-colors">
-                                    <button type="button" onClick={() => setFormData({...formData, description: p.content})} className="text-sm font-bold text-gray-700 hover:text-orange-600 transition-colors" title="點擊帶入此模板">{p.title}</button>
-                                    <button type="button" onClick={() => handleDeletePreset(p.id)} className="text-red-400 hover:text-red-600 ml-2 transition-colors" title="刪除模板"><Trash2 className="w-4 h-4" /></button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-sm font-bold text-orange-600/70 mb-5">目前沒有儲存的模板喔！在下方輸入備註後即可存為模板。</p>
-                            )}
-                            <div className="flex flex-col md:flex-row gap-3">
-                              <input type="text" placeholder="替目前的備註命名 (如: 寶可夢奪包賽)" className="flex-1 p-3 text-sm font-bold border border-orange-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 bg-white" value={newPresetTitle} onChange={(e) => setNewPresetTitle(e.target.value)} />
-                              <button type="button" onClick={handleSavePreset} className="px-6 py-3 bg-orange-500 text-white text-sm font-black rounded-xl shadow-sm hover:bg-orange-600 active:scale-95 transition-all whitespace-nowrap">儲存為模板</button>
-                            </div>
-                          </div>
-                          <textarea rows="5" placeholder="填寫詳細的獎勵內容..." className="w-full p-4 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none resize-none" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} />
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
-                          <div className="bg-gray-50 p-5 rounded-xl border border-gray-200">
-                            <label className="text-sm font-black text-gray-700 block mb-3 flex items-center gap-1.5"><ImageIcon className="w-5 h-5 text-orange-500" /> 上傳主視覺宣傳圖 (最多4張)</label>
-                            <input type="file" multiple accept="image/*" onChange={async e => { 
-                              const imgs = await Promise.all(Array.from(e.target.files).slice(0, 4).map(compressImage)); 
-                              setFormData({...formData, images: [...formData.images, ...imgs].slice(0, 4)}); 
-                            }} className="w-full text-sm text-gray-500 file:bg-orange-100 file:text-orange-700 file:font-bold file:border-0 file:rounded-xl file:px-4 file:py-2 file:mr-3 cursor-pointer hover:file:bg-orange-200 transition-colors" />
-                            {formData.images && formData.images.length > 0 && (
-                              <div className="mt-4 flex gap-3 overflow-x-auto pb-2">
-                                {formData.images.map((img, i) => (
-                                  <div key={i} className="relative flex-shrink-0">
-                                    <img src={img} className="h-20 w-auto rounded-lg border-2 border-gray-200 shadow-sm" />
-                                    <button type="button" onClick={() => setFormData({...formData, images: formData.images.filter((_, idx) => idx !== i)})} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform"><X className="w-4 h-4"/></button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="bg-yellow-50 p-5 rounded-xl border border-yellow-200">
-                            <label className="text-sm font-black text-yellow-800 block mb-3 flex items-center gap-1.5"><Gift className="w-5 h-5 text-yellow-600" /> 獨立豪華獎品庫 (最多4張)</label>
-                            <input type="file" multiple accept="image/*" onChange={async e => { 
-                              const imgs = await Promise.all(Array.from(e.target.files).slice(0, 4).map(compressImage)); 
-                              setFormData({...formData, prizeImages: [...(formData.prizeImages || []), ...imgs].slice(0, 4)}); 
-                            }} className="w-full text-sm text-yellow-700 file:bg-yellow-200 file:text-yellow-800 file:font-bold file:border-0 file:rounded-xl file:px-4 file:py-2 file:mr-3 cursor-pointer hover:file:bg-yellow-300 transition-colors" />
-                            {formData.prizeImages && formData.prizeImages.length > 0 && (
-                              <div className="mt-4 flex gap-3 overflow-x-auto pb-2">
-                                {formData.prizeImages.map((img, i) => (
-                                  <div key={`prize-${i}`} className="relative flex-shrink-0">
-                                    <img src={img} className="h-20 w-auto rounded-lg border-2 border-yellow-300 shadow-sm" />
-                                    <button type="button" onClick={() => setFormData({...formData, prizeImages: formData.prizeImages.filter((_, idx) => idx !== i)})} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform"><X className="w-4 h-4"/></button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <button type="submit" className="w-full py-4 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all text-xl flex justify-center items-center gap-2 mt-6"><Plus className="w-7 h-7" /> 確認發布賽事！</button>
-                      </form>
-                    </div>
+                {/* 2. 三人循環賽 */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3.5 flex flex-col hover:shadow transition-shadow">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-2">
+                    <span className="font-black text-sm text-slate-800 flex items-center gap-1"><span className="text-lg">🔄</span> 3人循環賽</span>
+                    <span className="text-[10px] bg-teal-50 border border-teal-200 text-teal-800 font-extrabold px-1.5 py-0.5 rounded-full">突發局</span>
                   </div>
 
-                  {/* 右側一欄：分類管理與教學管理 */}
-                  <div className="space-y-6">
-                    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
-                      <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Tags className="w-6 h-6 text-orange-500" /> 標籤管理</h2>
-                      <div className="flex flex-wrap gap-2 mb-5">
-                        {categories.map(cat => (
-                          <div key={cat.id} className={`flex items-center gap-1 border border-black/10 rounded-lg py-1 pl-3 pr-1 text-sm font-black text-black shadow-sm ${cat.color || 'bg-gray-100'}`}>
-                            <span>{cat.label}</span>
-                            <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'game_categories', cat.id))} className="p-1 text-black/40 hover:text-red-600 hover:bg-black/10 rounded-md transition-colors"><Trash2 className="w-4 h-4" /></button>
-                          </div>
-                        ))}
-                        {categories.length === 0 && <span className="text-sm text-gray-400 font-bold py-2">無自訂分類👇</span>}
+                  <FeeController value={fee3p} onChange={setFee3p} theme="teal" />
+
+                  <div className="space-y-2.5 text-xs sm:text-sm flex-1 mt-1">
+                    <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                      <span className="font-bold text-slate-700">🥇 2勝0敗：</span>
+                      <div className="text-right">
+                        <span className="font-black text-amber-700 text-sm">{customSpecData.p3.p1} 包</span>
+                        {getPTCGGuide(customSpecData.p3.p1 + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(customSpecData.p3.p1 + " 包").replace(/[()]/g, '')}</span>}
+                        <div className="text-[9px] text-slate-400 font-bold mt-1">(成本: ${customSpecData.p3.topCost?.toFixed(0)} / 售價: ${customSpecData.p3.topValue?.toFixed(0)})</div>
                       </div>
-                      <form onSubmit={handleAddCategory} className="flex flex-col gap-3 border-t border-gray-100 pt-4">
-                        <input required type="text" placeholder="標籤名稱 (如: 航海王)" value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} className="w-full p-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-gray-50 font-bold" />
-                        <select value={newCategoryColor} onChange={e => setNewCategoryColor(e.target.value)} className="w-full p-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-gray-50 font-bold">
-                          <option value="bg-red-200">🔴 紅色</option><option value="bg-orange-200">🟠 橙色</option><option value="bg-yellow-200">🟡 黃色</option><option value="bg-green-200">🟢 綠色</option><option value="bg-blue-200">🔵 藍色</option><option value="bg-indigo-200">🟣 靛色</option><option value="bg-purple-200">🟪 紫色</option><option value="bg-gray-400">⚫ 黑色</option><option value="bg-white border border-gray-300">⚪ 白色</option>
-                        </select>
-                        <button type="submit" className="w-full py-3 bg-orange-100 text-orange-700 hover:bg-orange-200 font-black rounded-xl transition-colors shadow-sm">新增分類</button>
-                      </form>
                     </div>
-
-                    <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-200">
-                      <h2 className="text-xl font-black text-gray-800 mb-5 flex items-center gap-2"><Sparkles className="w-6 h-6 text-blue-500" /> 福利圖管理</h2>
-                      <div className="grid grid-cols-2 gap-3 mb-5">
-                        {tutorialBanners.map(b => (
-                          <div key={b.id} className="relative group rounded-xl overflow-hidden aspect-square bg-gray-50 border border-gray-200 shadow-sm">
-                            <img src={b.url} alt={b.title} className="w-full h-full object-cover" />
-                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 text-center backdrop-blur-sm">
-                              <span className="text-white text-[10px] font-black mb-2 border border-white/50 px-2 py-1 rounded-full truncate w-[90%]">{b.title}</span>
-                              <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_banners', b.id))} className="bg-red-500 text-white p-2 rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all"><Trash2 className="w-4 h-4" /></button>
-                            </div>
-                          </div>
-                        ))}
-                        {tutorialBanners.length === 0 && <div className="col-span-full py-6 text-center text-gray-400 text-sm font-bold border-2 border-dashed border-gray-200 rounded-xl">尚無教學圖👇</div>}
+                    <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100">
+                      <span className="font-bold text-slate-700">🥈 1勝1敗：</span>
+                      <div className="text-right">
+                        <span className="font-bold text-blue-700 text-sm">{customSpecData.p3.p2} 包</span>
+                        {getPTCGGuide(customSpecData.p3.p2 + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(customSpecData.p3.p2 + " 包").replace(/[()]/g, '')}</span>}
                       </div>
-
-                      <form onSubmit={handleAddTutorialBanner} className="space-y-3 bg-blue-50 p-4 rounded-xl border border-blue-100 shadow-inner">
-                        <input required type="text" placeholder="對應遊戲名稱" className="w-full p-3 border border-blue-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" value={newTutorialBanner.title} onChange={e => setNewTutorialBanner({...newTutorialBanner, title: e.target.value})} />
-                        <input id="tutorial-banner-file" required type="file" accept="image/*" className="w-full text-xs bg-white border border-blue-200 p-2 rounded-xl text-gray-500 file:bg-blue-100 file:text-blue-700 file:font-bold file:border-0 file:rounded-lg file:px-3 file:py-1.5 cursor-pointer" onChange={async e => setNewTutorialBanner({...newTutorialBanner, url: await compressImage(e.target.files[0])})} />
-                        {newTutorialBanner.url && <img src={newTutorialBanner.url} className="h-16 w-auto rounded-lg border-2 border-blue-300 shadow-sm" />}
-                        <button type="submit" className="w-full py-3 bg-blue-600 text-white font-black rounded-xl shadow-md hover:bg-blue-700 transition-all text-sm"><UploadCloud className="w-4 h-4 inline mr-1" /> 上傳</button>
-                      </form>
+                    </div>
+                    <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                      <span className="font-medium text-slate-500">🥉 0勝2敗：</span><span className="font-bold text-slate-600">{bottomPacks} 包 (保底)</span>
                     </div>
                   </div>
                 </div>
-                
-                {/* ========================================== */}
-                {/* 💡 後台專用：大螢幕滿版色塊行事曆 (TimeTree 風格) */}
-                {/* ========================================== */}
-                <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-gray-200 mt-6">
-                  <h2 className="text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><Calendar className="w-8 h-8 text-orange-500" /> 賽事總覽大月曆</h2>
-                  
-                  {/* 💡 批量店休設定區塊 */}
-                  <div className="mb-6 p-5 bg-gray-50 border border-gray-200 rounded-2xl shadow-inner">
-                    <h3 className="text-sm font-black text-gray-700 mb-4 flex items-center gap-1.5"><Coffee className="w-4 h-4 text-gray-500"/> 連假 / 批量店休一鍵設定</h3>
-                    <form onSubmit={handleBatchClosure} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                      <div>
-                        <label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label>
-                        <input type="date" required value={batchStartDate} onChange={e=>setBatchStartDate(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-gray-400 outline-none" />
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-gray-500 block mb-1">結束日期</label>
-                        <input type="date" required value={batchEndDate} onChange={e=>setBatchEndDate(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-gray-400 outline-none" />
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-gray-500 block mb-1">店休原因</label>
-                        <input type="text" placeholder="預設: 店休" value={batchReason} onChange={e=>setBatchReason(e.target.value)} className="w-full p-2.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-gray-400 outline-none" />
-                      </div>
-                      <button type="submit" className="w-full py-2.5 bg-gray-800 text-white font-black rounded-xl shadow-sm hover:bg-black active:scale-95 transition-all text-sm">一鍵整段店休！</button>
-                    </form>
-                  </div>
 
-                  <div className="flex flex-col md:flex-row justify-between items-center mb-6 bg-gray-50 p-4 rounded-2xl border border-gray-100 gap-4">
-                    <div className="flex items-center gap-4">
-                      <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() - 1, 1))} className="p-2.5 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-6 h-6"/></button>
-                      <h3 className="font-black text-xl text-gray-800 w-32 text-center">{adminMonth.getFullYear()} 年 {adminMonth.getMonth()+1} 月</h3>
-                      <button onClick={() => setAdminMonth(new Date(adminMonth.getFullYear(), adminMonth.getMonth() + 1, 1))} className="p-2.5 hover:bg-orange-100 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-6 h-6"/></button>
-                    </div>
-                    <button onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)} className="text-sm font-bold text-gray-500 hover:text-orange-600 border border-gray-200 bg-white px-5 py-2 rounded-xl shadow-sm transition-colors hover:shadow-md">改以「{weekStartsOnMonday ? '週日' : '週一'}」為起始</button>
+                {/* 3. 三輪日常瑞士 (新增實體大獎切換) */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3.5 flex flex-col hover:shadow transition-shadow">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-0">
+                    <span className="font-black text-sm text-slate-800 flex items-center gap-1"><span className="text-lg">⏱️</span> 3輪日常賽</span>
+                    <span className="text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold px-1.5 py-0.5 rounded-full">4~8人</span>
                   </div>
-                  
-                  {/* 星期標題 */}
-                  <div className="grid grid-cols-7 gap-1 md:gap-2 mb-3 text-center text-sm font-black text-gray-400">
-                    {weekHeaders.map(h => <div key={h}>{h}</div>)}
-                  </div>
-                  
-                  {/* 大螢幕自適應網格 */}
-                  <div className="grid grid-cols-7 gap-1 md:gap-2">
+                  {renderModeToggle(r3Mode, setR3Mode, 'emerald')}
+                  <FeeController value={fee3r} onChange={setFee3r} theme="emerald" />
+                  <div className="space-y-2.5 text-xs sm:text-sm flex-1 mt-1">
                     {(() => {
-                      const year = adminMonth.getFullYear(), month = adminMonth.getMonth();
-                      const days = new Date(year, month + 1, 0).getDate();
-                      const firstDay = new Date(year, month, 1).getDay();
-                      const adj = weekStartsOnMonday ? (firstDay === 0 ? 6 : firstDay - 1) : firstDay;
-                      const cells = [];
-                      for (let i = 0; i < adj; i++) cells.push(<div key={`e-${i}`} className="h-16 md:min-h-[140px] bg-gray-50/50 rounded-xl"></div>);
-                      for (let d = 1; d <= days; d++) {
-                        const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                        const evs = tournaments.filter(t => t.date === ds);
-                        const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
-                        const closureObj = getClosureObj(ds);
+                      const data = customSpecData.r3;
+                      return data.isPrizeMode ? (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                             <span className="font-bold text-slate-700">🥇 冠軍大獎：</span>
+                             <div className="flex items-center gap-1">
+                               <span className="text-xs font-bold text-slate-500">$</span>
+                               <input type="number" value={r3PrizeCost} onChange={(e)=>setR3PrizeCost(Math.max(0, Number(e.target.value)))} className="w-16 text-center text-xs font-bold border border-amber-300 rounded p-0.5 text-amber-700 focus:outline-amber-500" />
+                             </div>
+                          </div>
+                          <div className="mt-2 text-[11px] bg-slate-50 text-slate-700 p-2 rounded font-bold text-center border border-slate-200 shadow-sm">
+                             {data.minPlayers > 100 ? (
+                               <span className="text-rose-600">此報名費無法回本，請調高！</span>
+                             ) : (
+                               <>滿 <span className="text-emerald-600 text-sm">{data.minPlayers} 人</span> 開賽 ➔ 毛利 {data.margin.toFixed(1)}%</>
+                             )}
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100 mt-2">
+                            <span className="font-bold text-slate-700">🥈 2 勝 1 敗：</span><div className="text-right"><span className="font-bold text-blue-700 text-sm">{data.sub} 包</span></div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🛡️ 1~0 勝：</span><span className="font-bold text-slate-600">{data.bot} 包</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                            <span className="font-bold text-slate-700">🥇 3 勝 0 敗：</span>
+                            <div className="text-right">
+                              <span className="font-black text-amber-700 text-sm">{data.top} 包</span>
+                              {getPTCGGuide(data.top + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(data.top + " 包").replace(/[()]/g, '')}</span>}
+                              <div className="text-[9px] text-slate-400 font-bold mt-1">(成本: ${data.topCost?.toFixed(0)} / 售價: ${data.topValue?.toFixed(0)})</div>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100">
+                            <span className="font-bold text-slate-700">🥈 2 勝 1 敗：</span>
+                            <div className="text-right"><span className="font-bold text-blue-700 text-sm">{data.sub} 包</span>{getPTCGGuide(data.sub + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(data.sub + " 包").replace(/[()]/g, '')}</span>}</div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🛡️ 1~0 勝：</span><span className="font-bold text-slate-600">{data.bot} 包</span>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
 
-                        cells.push(
-                          <div 
-                            key={ds} 
-                            onClick={() => setAdminSelectedDate(adminSelectedDate === ds ? null : ds)} 
-                            className={`relative min-h-[90px] md:min-h-[140px] flex flex-col items-stretch justify-start rounded-xl border p-1 md:p-2 transition-all cursor-pointer overflow-hidden ${adminSelectedDate === ds ? 'bg-orange-50 border-orange-500 shadow-md ring-2 ring-orange-500 scale-[1.02] z-10' : isToday ? 'bg-gray-50 border-gray-300' : 'bg-white border-gray-200 hover:border-orange-300 hover:shadow-sm'} ${closureObj ? 'bg-gray-100 border-gray-300 opacity-90' : ''}`}
-                          >
-                            <span className={`text-xs md:text-sm font-bold mb-1.5 self-center ${isToday ? 'bg-orange-500 text-white rounded-full w-6 h-6 md:w-7 md:h-7 flex items-center justify-center shadow-sm' : (evs.length > 0 ? 'text-gray-800' : 'text-gray-400')}`}>{d}</span>
-                            <div className="flex flex-col gap-1 w-full flex-1 overflow-y-auto hide-scrollbar">
-                              {closureObj ? (
-                                <div className="text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-gray-700 bg-gray-300 font-black text-center mb-1 flex justify-center items-center gap-1"><Coffee className="w-3 h-3"/> {closureObj.reason}</div>
+                {/* 4. 四輪挑戰賽 */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3.5 flex flex-col hover:shadow transition-shadow">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-0">
+                    <span className="font-black text-sm text-slate-800 flex items-center gap-1"><span className="text-lg">⚡</span> 4輪挑戰賽</span>
+                    <span className="text-[10px] bg-blue-50 border border-blue-200 text-blue-800 font-extrabold px-1.5 py-0.5 rounded-full">9~16人</span>
+                  </div>
+                  {renderModeToggle(r4Mode, setR4Mode, 'blue')}
+                  <FeeController value={fee4r} onChange={setFee4r} theme="blue" />
+                  <div className="space-y-2.5 text-xs sm:text-sm flex-1 mt-1">
+                    {(() => {
+                      const data = customSpecData.r4;
+                      return data.isPrizeMode ? (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                             <span className="font-bold text-slate-700">🥇 冠軍大獎：</span>
+                             <div className="flex items-center gap-1">
+                               <span className="text-xs font-bold text-slate-500">$</span>
+                               <input type="number" value={r4PrizeCost} onChange={(e)=>setR4PrizeCost(Math.max(0, Number(e.target.value)))} className="w-16 text-center text-xs font-bold border border-amber-300 rounded p-0.5 text-amber-700 focus:outline-amber-500" />
+                             </div>
+                          </div>
+                          <div className="mt-2 text-[11px] bg-slate-50 text-slate-700 p-2 rounded font-bold text-center border border-slate-200 shadow-sm">
+                             {data.minPlayers > 100 ? (
+                               <span className="text-rose-600">此報名費無法回本，請調高！</span>
+                             ) : (
+                               <>滿 <span className="text-blue-600 text-sm">{data.minPlayers} 人</span> 開賽 ➔ 毛利 {data.margin.toFixed(1)}%</>
+                             )}
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100 mt-2">
+                            <span className="font-bold text-slate-700">🥈 3 勝 1 敗：</span><div className="text-right"><span className="font-bold text-blue-700 text-sm">{data.sub} 包</span></div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🛡️ 2~0 勝：</span><span className="font-bold text-slate-600">{data.bot} 包</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                            <span className="font-bold text-slate-700">🥇 4 勝 0 敗：</span>
+                            <div className="text-right">
+                              <span className="font-black text-amber-700 text-sm">{data.top} 包</span>
+                              {getPTCGGuide(data.top + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(data.top + " 包").replace(/[()]/g, '')}</span>}
+                              <div className="text-[9px] text-slate-400 font-bold mt-1">(成本: ${data.topCost?.toFixed(0)} / 售價: ${data.topValue?.toFixed(0)})</div>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100">
+                            <span className="font-bold text-slate-700">🥈 3 勝 1 敗：</span>
+                            <div className="text-right"><span className="font-bold text-blue-700 text-sm">{data.sub} 包</span>{getPTCGGuide(data.sub + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(data.sub + " 包").replace(/[()]/g, '')}</span>}</div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🛡️ 2~0 勝：</span><span className="font-bold text-slate-600">{data.bot} 包</span>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
+
+                {/* 5. 五輪終極賽 */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3.5 flex flex-col hover:shadow transition-shadow">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-0">
+                    <span className="font-black text-sm text-slate-800 flex items-center gap-1"><span className="text-lg">🔥</span> 5輪終極賽</span>
+                    <span className="text-[10px] bg-indigo-50 border border-indigo-200 text-indigo-800 font-extrabold px-1.5 py-0.5 rounded-full">17~32人</span>
+                  </div>
+                  {renderModeToggle(r5Mode, setR5Mode, 'indigo')}
+                  <FeeController value={fee5r} onChange={setFee5r} theme="indigo" />
+                  <div className="space-y-2.5 text-xs sm:text-sm flex-1 mt-1">
+                    {(() => {
+                      const data = customSpecData.r5;
+                      return data.isPrizeMode ? (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                             <span className="font-bold text-slate-700">🥇 冠軍大獎：</span>
+                             <div className="flex items-center gap-1">
+                               <span className="text-xs font-bold text-slate-500">$</span>
+                               <input type="number" value={r5PrizeCost} onChange={(e)=>setR5PrizeCost(Math.max(0, Number(e.target.value)))} className="w-16 text-center text-xs font-bold border border-amber-300 rounded p-0.5 text-amber-700 focus:outline-amber-500" />
+                             </div>
+                          </div>
+                          <div className="mt-2 text-[11px] bg-slate-50 text-slate-700 p-2 rounded font-bold text-center border border-slate-200 shadow-sm">
+                             {data.minPlayers > 100 ? (
+                               <span className="text-rose-600">此報名費無法回本，請調高！</span>
+                             ) : (
+                               <>滿 <span className="text-indigo-600 text-sm">{data.minPlayers} 人</span> 開賽 ➔ 毛利 {data.margin.toFixed(1)}%</>
+                             )}
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100 mt-2">
+                            <span className="font-bold text-slate-700">🥈 4 勝 1 敗：</span><div className="text-right"><span className="font-bold text-blue-700 text-sm">{data.sub} 包</span></div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🛡️ 3~0 勝：</span><span className="font-bold text-slate-600">{data.bot} 包</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                            <span className="font-bold text-slate-700">🥇 5 勝 0 敗：</span>
+                            <div className="text-right">
+                              <span className="font-black text-amber-700 text-sm">{data.top} 包</span>
+                              {getPTCGGuide(data.top + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(data.top + " 包").replace(/[()]/g, '')}</span>}
+                              <div className="text-[9px] text-slate-400 font-bold mt-1">(成本: ${data.topCost?.toFixed(0)} / 售價: ${data.topValue?.toFixed(0)})</div>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100">
+                            <span className="font-bold text-slate-700">🥈 4 勝 1 敗：</span>
+                            <div className="text-right"><span className="font-bold text-blue-700 text-sm">{data.sub} 包</span>{getPTCGGuide(data.sub + " 包") && <span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">{getPTCGGuide(data.sub + " 包").replace(/[()]/g, '')}</span>}</div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🥉 3 勝 2 敗：</span><span className="font-bold text-slate-600">{calculations.actualMidPacks} 包</span>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200/60">
+                            <span className="font-medium text-slate-500">🛡️ 2~0 勝：</span><span className="font-bold text-slate-600">{data.bot} 包</span>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          ) : calculations.isGym ? (
+            <div className={`flex flex-col bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden min-h-0 transition-all duration-300 ${expandedSections.posterMilestones ? 'flex-[4]' : 'shrink-0'}`}>
+              <div onClick={() => toggleSection('posterMilestones')} className="shrink-0 px-3 py-2 bg-indigo-900 text-white text-xs sm:text-sm font-bold flex justify-between items-center cursor-pointer select-none">
+                <span className="flex items-center gap-1.5"><span>🖼️</span> 寶可夢官方道館賽海報里程碑 (固定3輪 雙向聯動高亮)</span>
+                <div className="flex items-center gap-2"><span className="bg-indigo-700/80 px-2 py-0.5 rounded text-[10px] sm:text-xs">👥 當前報名: {currentPlayers} 人</span><ChevronIcon expanded={expandedSections.posterMilestones} className="text-white" /></div>
+              </div>
+              {expandedSections.posterMilestones && (
+                <div className="p-3 overflow-auto flex-1 bg-slate-50/20 flex flex-col gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
+                    <div className={`rounded-xl border p-4 flex flex-col justify-between transition-all duration-300 shadow-sm relative overflow-hidden h-fit ${calculations.gymActiveStats.activeCard === 'C' ? 'bg-rose-50/80 border-rose-400 ring-4 ring-rose-500/20 transform scale-[1.02]' : 'bg-white border-slate-200 opacity-60'}`}>
+                      <div>
+                        <div onClick={() => toggleGymCard('league')} className="flex justify-between items-center cursor-pointer select-none border-b pb-2 mb-3">
+                          <h3 className="text-sm sm:text-base font-black text-slate-800 flex items-center gap-1.5"><span className="text-xl">🟨</span><span>突發小聯賽 (2 ~ 3人)</span></h3>
+                          <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); setIsEmergencyEditable(!isEmergencyEditable); if (isEmergencyEditable) { setOverrideWinner2(''); setOverrideLoser2(''); setOverrideP1_A(''); setOverrideP2_A(''); setOverrideP3_A(''); setOverrideP1_B(''); setOverrideP2_B(''); setOverrideP3_B(''); } }} className="bg-rose-700/80 hover:bg-rose-800 text-white font-extrabold px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5 active:scale-95 transition-colors">{isEmergencyEditable ? '🔒 鎖定' : '🔓 自訂'}</button><ChevronIcon expanded={gymCardExpanded.league} /></div>
+                        </div>
+                        {!gymCardExpanded.league && <div className="text-xs text-slate-950 font-black bg-rose-100/30 p-2 rounded border border-rose-200/50 mt-1 animate-in fade-in">🏆 冠軍 7 包 / 亞軍 1 包 <br />🥇 第一名 9 包 / 🥈 第二名 3 包 / 🥉 1 包保底</div>}
+                        {gymCardExpanded.league && (
+                          <div className="space-y-2.5 text-xs sm:text-sm animate-in fade-in duration-200">
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                              <div onClick={() => setGymLeague2Expanded(!gymLeague2Expanded)} className="bg-slate-100/80 p-2 text-[11px] font-bold text-rose-900 flex justify-between items-center cursor-pointer select-none"><span>⚔️ 【若當天來 2 人對決】(營收: $600)</span><ChevronIcon expanded={gymLeague2Expanded} className="text-rose-900/60" /></div>
+                              {gymLeague2Expanded && (
+                                <div className="p-2.5 bg-white space-y-2 border-t border-slate-100 animate-in fade-in duration-150">
+                                  <div className="flex justify-between items-center bg-slate-50 px-2 py-1 rounded"><span className="font-semibold text-slate-700">🥇 冠軍 (1勝0敗)：</span><div className="text-right"><span className="font-black text-slate-800">7 包</span><span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">(換2高級+1一般)</span></div></div>
+                                  <div className="flex justify-between items-center bg-slate-50 px-2 py-1 rounded"><span className="font-semibold text-slate-500">🥈 亞軍 (0勝1敗)：</span><span className="font-bold text-slate-600">1 包 (保底)</span></div>
+                                </div>
+                              )}
+                            </div>
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                              <div onClick={() => setGymLeague3Expanded(!gymLeague3Expanded)} className="bg-slate-100/80 p-2 text-[11px] font-bold text-teal-900 flex justify-between items-center cursor-pointer select-none"><span>🔄 【若當天來 3 人循環】(營收: $900)</span><ChevronIcon expanded={gymLeague3Expanded} className="text-teal-900/60" /></div>
+                              {gymLeague3Expanded && (
+                                <div className="p-2.5 bg-white space-y-2 border-t border-slate-100 animate-in fade-in duration-150">
+                                  <div className="flex justify-between items-center bg-slate-50 px-2 py-1 rounded"><span className="font-semibold text-slate-700">🥇 第一名 (3勝0敗)：</span><div className="text-right"><span className="font-black text-slate-800">9 包</span><span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">(直換 3 包高級)</span></div></div>
+                                  <div className="flex justify-between items-center bg-slate-50 px-2 py-1 rounded"><span className="font-semibold text-slate-700">🥈 第二名 (2勝1敗)：</span><div className="text-right"><span className="font-bold text-slate-700">3 包</span><span className="text-[10px] text-slate-950 font-black block leading-none mt-0.5">(直換 1 包高級)</span></div></div>
+                                  <div className="flex justify-between items-center bg-slate-50 px-2 py-1 rounded"><span className="font-semibold text-slate-500">🥉 第三名 (1勝2敗)：</span><span className="font-bold text-slate-600">1 包 (保底)</span></div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-4 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-500 font-semibold flex justify-between"><span>實時利潤判定: </span><span className="text-rose-600 font-black">{currentPlayers === 2 ? '42.4%' : '37.6%'}</span></div>
+                    </div>
+                    <div className={`rounded-xl border p-4 flex flex-col justify-between transition-all duration-300 shadow-sm relative overflow-hidden h-fit ${calculations.gymActiveStats.activeCard === 'A' ? 'bg-emerald-50/80 border-emerald-400 ring-4 ring-emerald-500/20 transform scale-[1.02]' : 'bg-white border-slate-200 opacity-60'}`}>
+                      <div>
+                        <div onClick={() => toggleGymCard('normal')} className="flex justify-between items-center cursor-pointer select-none border-b pb-2 mb-3">
+                          <h3 className="text-sm sm:text-base font-black text-slate-800 flex items-center gap-1.5"><span className="text-xl">🟩</span><span>常態周賽模式 (4 ~ 16人)</span></h3><ChevronIcon expanded={gymCardExpanded.normal} />
+                        </div>
+                        {!gymCardExpanded.normal && <div className="text-xs text-slate-950 font-black bg-emerald-100/30 p-2 rounded border border-emerald-200/50 mt-1 animate-in fade-in">🥇 3勝0敗：12 包 (直換 4高級包) <br />🥈 2勝1敗：6 包 (直換 2高級包) | 🛡️ 1 包保底</div>}
+                        {gymCardExpanded.normal && (
+                          <div className="space-y-3 text-xs sm:text-sm animate-in fade-in duration-200">
+                            <div className="flex justify-between items-center bg-amber-50 p-2 rounded border border-amber-100/50"><span className="font-bold text-amber-900">🥇 3 勝 0 敗：</span><div className="text-right"><span className="font-black text-amber-800 text-sm sm:text-base">12 包</span><span className="text-xs font-black text-slate-950 block">可直換 4 包高級包</span></div></div>
+                            <div className="flex justify-between items-center bg-blue-50 p-2 rounded border border-blue-100/50"><span className="font-bold text-blue-900">🥈 2 勝 1 敗：</span><div className="text-right"><span className="font-black text-blue-800 text-sm sm:text-base">6 包</span><span className="text-xs font-black text-slate-950 block">可直換 2 包高級包</span></div></div>
+                            <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200"><span className="font-medium text-slate-600">🛡️ 0 ~ 1 勝：</span><span className="font-bold text-slate-600">1 包 (保底)</span></div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-4 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-500 font-semibold flex justify-between"><span>預估包成本/人: 4.25包</span><span className="text-emerald-600">實際毛利: 38.8%</span></div>
+                    </div>
+                    <div className={`rounded-xl border p-4 flex flex-col justify-between transition-all duration-300 shadow-sm relative overflow-hidden h-fit ${calculations.gymActiveStats.activeCard === 'B' ? 'bg-indigo-50/80 border-indigo-400 ring-4 ring-indigo-500/20 transform scale-[1.02]' : 'bg-white border-slate-200 opacity-60'}`}>
+                      <div>
+                        <div onClick={() => toggleGymCard('grand')} className="flex justify-between items-center cursor-pointer select-none border-b pb-2 mb-3">
+                          <h3 className="text-sm sm:text-base font-black text-slate-800 flex items-center gap-1.5"><span className="text-xl">🔵</span><span>大賽造神模式 (17 ~ 32人)</span></h3><ChevronIcon expanded={gymCardExpanded.grand} />
+                        </div>
+                        {!gymCardExpanded.grand && <div className="text-xs text-slate-950 font-black bg-indigo-100/30 p-2 rounded border border-indigo-200/50 mt-1 animate-in fade-in">🥇 3勝0敗：🔥 15 包 (直換 5高級包) <br />🥈 2勝1敗：6 包 (直換 2高級包) | 🛡️ 1 包保底</div>}
+                        {gymCardExpanded.grand && (
+                          <div className="space-y-3 text-xs sm:text-sm animate-in fade-in duration-200">
+                            <div className="flex justify-between items-center bg-amber-50 p-2 rounded border border-amber-100/50"><span className="font-bold text-amber-900">🥇 3 勝 0 敗：</span><div className="text-right"><span className="font-black text-amber-800 text-sm sm:text-base">🔥 15 包</span><span className="text-xs font-black text-slate-950 block">可直換 5 包高級包</span></div></div>
+                            <div className="flex justify-between items-center bg-blue-50 p-2 rounded border border-blue-100/50"><span className="font-bold text-blue-900">🥈 2 勝 1 敗：</span><div className="text-right"><span className="font-black text-blue-800 text-sm sm:text-base">6 包</span><span className="text-xs font-black text-slate-950 block">可直換 2 包高級包</span></div></div>
+                            <div className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-200"><span className="font-medium text-slate-600">🛡️ 0 ~ 1 勝：</span><span className="font-bold text-slate-600">1 包 (保底)</span></div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-4 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-500 font-semibold flex justify-between"><span>預估包成本/人: 4.625包</span><span className="text-indigo-600">實際毛利: 33.4%</span></div>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-indigo-950 text-white rounded-lg flex flex-col sm:flex-row justify-between items-start sm:items-center text-xs font-bold shadow-md animate-in fade-in">
+                    <div className="flex items-center gap-1.5"><span className="text-base">📈</span><span>官方道館賽實時精算看板：</span></div>
+                    <div className="flex flex-wrap gap-x-6 gap-y-1 mt-1.5 sm:mt-0"><span>當天總營收: <b className="text-amber-300 text-sm">${calculations.gymActiveStats.rev}</b></span><span>預估死成本: <b className="text-rose-300">-${calculations.gymActiveStats.cost.toFixed(0)}</b></span><span>實時毛利率: <b className="text-emerald-300 text-sm">{calculations.gymActiveStats.margin.toFixed(1)}%</b></span><span>超額可用加碼金: <b className="text-emerald-300">${Math.floor(calculations.gymActiveStats.surplus)}</b></span></div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className={`flex flex-col bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden min-h-0 transition-all duration-300 ${expandedSections.counterTable ? 'flex-[3]' : 'shrink-0'}`}>
+              <div onClick={() => toggleSection('counterTable')} className={`shrink-0 px-3 py-2 border-b text-white text-xs sm:text-sm font-bold flex justify-between items-center cursor-pointer select-none ${calculations.isSmooth ? 'bg-teal-600' : calculations.isGodMode ? 'bg-rose-700' : 'bg-pink-600'}`}>
+                <span>一、櫃台發放對照表 {matchRounds === 'auto' ? '(4欄防呆對照)' : `(固定 ${matchRounds} 輪精簡對照)`}</span><ChevronIcon expanded={expandedSections.counterTable} className="text-white" />
+              </div>
+              {expandedSections.counterTable && (
+                <div className="overflow-auto flex-1 min-h-0 p-2 bg-slate-50/30">
+                  {matchRounds === 'auto' ? (
+                    <table className="w-full text-xs text-center border-collapse">
+                      <thead className="bg-slate-50 text-slate-500 border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                        <tr><th className="py-1.5 px-1 border-r border-slate-200 font-bold w-12 bg-slate-50 text-xs sm:text-sm">戰績</th><th className="py-1.5 px-1 border-r border-slate-200 font-bold bg-slate-50 text-xs sm:text-sm">3 輪 <span className="text-[0.68rem] block text-slate-400 font-medium">4~8人</span></th><th className="py-1.5 px-1 border-r border-slate-200 font-bold bg-slate-50 text-xs sm:text-sm">4 輪 <span className="text-[0.68rem] block text-slate-400 font-medium">9~16人</span></th><th className="py-1.5 px-1 border-r border-slate-200 font-extrabold text-teal-700 bg-teal-50 text-xs sm:text-sm">5輪常態 <span className="text-[0.68rem] block text-teal-500 font-semibold">17~24人</span></th><th className="py-1.5 px-1 font-extrabold text-indigo-700 bg-indigo-50 text-xs sm:text-sm">5輪特企 <span className="text-[0.68rem] block text-indigo-400 font-semibold">25~32人</span></th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs sm:text-sm bg-white">
+                        <tr className="hover:bg-slate-50 transition-colors"><td className="py-1 px-1 font-bold border-r border-slate-200 bg-slate-50/80 text-slate-700">5 勝</td><td className="py-1 px-1 border-r border-slate-200">{renderTableCell('5勝', '3')}</td><td className="py-1 px-1 border-r border-slate-200">{renderTableCell('5勝', '4')}</td><td className="py-1 px-1 border-r border-slate-200 bg-amber-50/20">{renderTableCell('5勝', '5_normal')}</td><td className="py-1 px-1 bg-amber-100/20">{renderTableCell('5勝', '5_special')}</td></tr>
+                        <tr className="hover:bg-slate-50 transition-colors"><td className="py-1 px-1 font-bold border-r border-slate-200 bg-slate-50/80 text-slate-700">4 勝</td><td className="py-1 px-1 border-r border-slate-200">{renderTableCell('4勝', '3')}</td><td className="py-1 px-1 border-r border-slate-200 bg-amber-50/10">{renderTableCell('4勝', '4')}</td><td className="py-1 px-1 border-r border-slate-200">{renderTableCell('4勝', '5_normal')}</td><td className="py-1 px-1">{renderTableCell('4勝', '5_special')}</td></tr>
+                        <tr className="hover:bg-slate-50 transition-colors"><td className="py-1.5 px-1 font-bold border-r border-slate-200 bg-slate-50/80 text-slate-700">3 勝</td><td className="py-1.5 px-1 border-r border-slate-200 bg-amber-50/10">{renderTableCell('3勝', '3')}</td><td className="py-1.5 px-1 border-r border-slate-200">{renderTableCell('3勝', '4')}</td><td className="py-1.5 px-1 border-r border-slate-200 bg-slate-50/30">{renderTableCell('3勝', '5_normal')}</td><td className="py-1.5 px-1 bg-slate-50/30">{renderTableCell('3勝', '5_special')}</td></tr>
+                        <tr className="hover:bg-slate-50 transition-colors"><td className="py-1.5 px-1 font-bold border-r border-slate-200 bg-slate-50/80 text-slate-700">2 勝</td><td className="py-1.5 px-1 border-r border-slate-200">{renderTableCell('2勝', '3')}</td><td className="py-1.5 px-1 border-r border-slate-200 bg-slate-50/30">{renderTableCell('2勝', '4')}</td><td className="py-1.5 px-1 border-r border-slate-200 bg-slate-50/30">{renderTableCell('2勝', '5_normal')}</td><td className="py-1.5 px-1 bg-slate-50/30">{renderTableCell('2勝', '5_special')}</td></tr>
+                        <tr className="hover:bg-slate-50 transition-colors"><td className="py-1.5 px-1 font-bold border-r border-slate-200 bg-slate-50/80 text-slate-700">1~0勝</td><td className="py-1.5 px-1 border-r border-slate-200">{renderTableCell('1~0勝', '3')}</td><td className="py-1.5 px-1 border-r border-slate-200 bg-slate-50/30">{renderTableCell('1~0勝', '4')}</td><td className="py-1.5 px-1 border-r border-slate-200 bg-slate-50/30">{renderTableCell('1~0勝', '5_normal')}</td><td className="py-1.5 px-1 bg-slate-50/30">{renderTableCell('1~0勝', '5_special')}</td></tr>
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="max-w-md mx-auto bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden my-1">
+                      <div className={`px-4 py-2 text-white font-bold text-center text-xs tracking-wider ${calculations.isSmooth ? 'bg-teal-600' : calculations.isGodMode ? 'bg-rose-700' : 'bg-pink-600'}`}>🏆 固定【{matchRounds} 輪】 櫃台兌換標準卡</div>
+                      <div className="divide-y divide-slate-100 text-xs sm:text-sm">
+                        <div className="flex justify-between items-center px-4 py-3 bg-amber-50/40"><div className="flex items-center gap-2"><span className="text-base">🥇</span><span className="font-extrabold text-slate-800">{matchRounds} 勝 0 敗 (全勝)</span></div><div className="flex flex-col items-end"><span className="text-sm font-black text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded">{singleRewards.top}</span>{getPTCGGuide(singleRewards.top) && <span className="text-xs text-slate-950 font-black mt-1">{getPTCGGuide(singleRewards.top).replace(/[()]/g, '')}</span>}{singleRewards.topLottery && <span className="text-xs text-slate-950 font-black mt-1">{singleRewards.topLottery}</span>}</div></div>
+                        <div className="flex justify-between items-center px-4 py-2.5 bg-blue-50/10"><div className="flex items-center gap-2"><span className="text-base">🥈</span><span className="font-bold text-slate-700">{Number(matchRounds) - 1} 勝 1 敗 (1敗)</span></div><div className="flex flex-col items-end"><span className="text-sm font-extrabold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1 rounded">{singleRewards.sub}</span>{getPTCGGuide(singleRewards.sub) && <span className="text-xs text-slate-950 font-black mt-1">{getPTCGGuide(singleRewards.sub).replace(/[()]/g, '')}</span>}</div></div>
+                        {Number(matchRounds) === 5 && <div className="flex justify-between items-center px-4 py-2.5 bg-teal-50/10"><div className="flex items-center gap-2"><span className="text-base">🥉</span><span className="font-medium text-slate-700">3 勝 2 敗</span></div><div className="flex flex-col items-end"><span className="text-xs font-semibold text-teal-700 bg-teal-50 border border-teal-100 px-3 py-1 rounded">{singleRewards.mid}</span>{getPTCGGuide(singleRewards.mid) && <span className="text-xs text-slate-950 font-black mt-1">{getPTCGGuide(singleRewards.mid).replace(/[()]/g, '')}</span>}</div></div>}
+                        {Number(matchRounds) === 4 && <div className="flex justify-between items-center px-4 py-2.5 bg-pink-50/10"><div className="flex items-center gap-2"><span className="text-base">🥉</span><span className="font-medium text-slate-700">2 勝 2 敗</span></div><div className="flex flex-col items-end"><span className="text-xs font-semibold text-pink-700 bg-pink-50 border border-pink-100 px-3 py-1 rounded">{singleRewards.lowMid}</span>{getPTCGGuide(singleRewards.lowMid) && <span className="text-xs text-slate-950 font-black mt-1">{getPTCGGuide(singleRewards.lowMid).replace(/[()]/g, '')}</span>}</div></div>}
+                        <div className="flex justify-between items-center px-4 py-2.5 bg-slate-50/50"><div className="flex items-center gap-2"><span className="text-xs">🛡️</span><span className="text-slate-500 font-medium">其餘勝場 (保底)</span></div><span className="text-xs text-slate-500 font-bold bg-slate-100 border border-slate-200 px-3 py-1 rounded">{singleRewards.bot} / {bottomPacks} 包</span></div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-2.5 p-2 bg-emerald-50 rounded border border-emerald-200/60 flex justify-between items-center text-xs font-bold text-emerald-800"><div className="flex items-center gap-1.5"><span>💡</span><span>目前人數規模可用彈性加碼金 (多出預算)：</span></div><div className="flex gap-4"><span>8人局: <b className="text-emerald-700">${Math.max(0, Math.floor(calculations.surplus8 || 0))}</b></span><span>16人局: <b className="text-emerald-700">${Math.max(0, Math.floor(calculations.surplus16 || 0))}</b></span><span>24人局: <b className="text-emerald-700 text-sm">${Math.max(0, Math.floor(calculations.surplus24 || 0))}</b></span><span>32人局: <b className="text-emerald-700">${Math.max(0, Math.floor(calculations.surplus32 || 0))}</b></span></div></div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* v9.8.5: 🚨 2~3人突發面板 (新增解鎖編輯與實時連動) */}
+          {!calculations.isGym && rewardModel !== 'custom-spec' && (
+            <div className={`flex flex-col bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden min-h-0 transition-all duration-300
+                ${expandedSections.emergencyPanel ? 'flex-[2]' : 'shrink-0'}`}>
+              <div
+                className="shrink-0 px-3 py-2 border-b bg-rose-700 text-white text-xs sm:text-sm font-bold flex justify-between items-center cursor-pointer select-none"
+                onClick={() => toggleSection('emergencyPanel')}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span>🚨</span> 2~3人突發局智慧發放面板 (自辦賽自訂連動)
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsEmergencyEditable(!isEmergencyEditable);
+                      if (isEmergencyEditable) {
+                        setOverrideWinner2(''); setOverrideLoser2('');
+                        setOverrideP1_A(''); setOverrideP2_A(''); setOverrideP3_A('');
+                        setOverrideP1_B(''); setOverrideP2_B(''); setOverrideP3_B('');
+                      }
+                    }}
+                    className="bg-white/10 hover:bg-white/20 border border-white/25 text-white font-extrabold px-2 py-0.5 rounded text-[10px] sm:text-xs flex items-center gap-1 active:scale-95 transition-all mr-2"
+                  >
+                    {isEmergencyEditable ? '🔒 鎖定防呆' : '🔓 自訂包數'}
+                  </button>
+                  <ChevronIcon expanded={expandedSections.emergencyPanel} className="text-white" />
+                </div>
+              </div>
+
+              {expandedSections.emergencyPanel && (
+                <div className="p-3 overflow-auto flex-1 bg-slate-50/40 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* 2人一擊討 */}
+                  <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col justify-between">
+                    <div className="bg-rose-50 px-3 py-1.5 border-b border-rose-100 flex justify-between items-center text-xs font-extrabold text-rose-900">
+                      <span>⚔️ 2人單挑決鬥賽</span>
+                      <span className="text-rose-600 bg-white border border-rose-200 px-1.5 py-0.2 rounded">營收: ${emergency.rev2}</span>
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col justify-center gap-2">
+                      <div className="flex justify-between items-center bg-amber-50/50 p-2 rounded border border-amber-100">
+                        <span className="text-xs font-bold text-slate-700">🥇 贏家 (1勝0敗)：</span>
+                        <div className="flex flex-col items-end">
+                          {isEmergencyEditable ? (
+                            <input
+                              type="number"
+                              className="w-16 border border-rose-300 rounded p-0.5 text-center text-xs font-bold bg-white focus:outline-rose-500"
+                              value={overrideWinner2}
+                              onChange={(e) => setOverrideWinner2(e.target.value)}
+                              placeholder={emergency.winnerPacks2}
+                            />
+                          ) : (
+                            <span className="text-sm font-black text-amber-700">{emergency.winnerPacks2} 包</span>
+                          )}
+                          {getPTCGGuide(emergency.winnerPacks2 + " 包") && (
+                            <span className="text-[10px] text-slate-950 font-black mt-0.5">
+                              {getPTCGGuide(emergency.winnerPacks2 + " 包").replace(/[()]/g, '')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex justify-between items-center bg-slate-100/50 p-2 rounded border border-slate-200/50">
+                        <span className="text-xs font-bold text-slate-500">🥈 輸家 (0勝1敗)：</span>
+                        {isEmergencyEditable ? (
+                          <input
+                            type="number"
+                            className="w-16 border border-rose-300 rounded p-0.5 text-center text-xs font-bold bg-white focus:outline-rose-500"
+                            value={overrideLoser2}
+                            onChange={(e) => setOverrideLoser2(e.target.value)}
+                            placeholder={emergency.loserPacks2}
+                          />
+                        ) : (
+                          <span className="text-sm font-bold text-slate-600">{emergency.loserPacks2} 包</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 px-3 py-1.5 border-t border-slate-100 flex justify-between items-center text-[11px] font-bold">
+                      <span className="text-slate-500">實際毛利率：</span>
+                      <span className={`text-xs font-black ${emergency.margin2 >= targetMargin ? 'text-teal-600' : 'text-rose-600'}`}>
+                        {emergency.margin2.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 3人循環賽 */}
+                  <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col justify-between">
+                    <div className="bg-teal-50 px-3 py-1.5 border-b border-teal-100 flex justify-between items-center text-xs font-extrabold text-teal-900">
+                      <div className="flex items-center gap-1.5">
+                        <span>🔄 3人循環賽</span>
+                        <select 
+                          value={threePlayerMode} 
+                          onChange={(e) => setThreePlayerMode(e.target.value)}
+                          className="bg-white border border-teal-200 rounded text-[10px] px-1 py-0.5 focus:outline-none"
+                        >
+                          <option value="A">含輪空 (軟體判定)</option>
+                          <option value="B">不含輪空 (純實戰)</option>
+                        </select>
+                      </div>
+                      <span className="text-teal-600 bg-white border border-teal-200 px-1.5 py-0.2 rounded">營收: ${emergency.rev3}</span>
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col justify-center gap-2">
+                      {threePlayerMode === 'A' ? (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-1.5 rounded border border-amber-100">
+                            <span className="text-xs font-bold text-slate-700">🥇 第一名 (3勝0敗)：</span>
+                            <div className="flex flex-col items-end">
+                              {isEmergencyEditable ? (
+                                <input
+                                  type="number"
+                                  className="w-16 border border-teal-300 rounded p-0.5 text-center text-xs font-bold bg-white"
+                                  value={overrideP1_A}
+                                  onChange={(e) => setOverrideP1_A(e.target.value)}
+                                  placeholder={emergency.p1_A}
+                                />
                               ) : (
-                                evs.map((e, i) => {
-                                  const catColor = categories.find(c => c.gameType === e.gameType)?.color || 'bg-gray-200';
-                                  const blockBg = getDotColor(catColor);
-                                  return (
-                                    <div key={i} className={`text-[10px] md:text-xs truncate w-full px-1.5 py-1 rounded shadow-sm text-white font-bold text-left mb-1 ${blockBg}`} title={`${e.gameType}-${e.title}`}>
-                                      {e.gameType}-{e.title}
-                                    </div>
-                                  );
-                                })
+                                <span className="text-sm font-black text-amber-700">{emergency.p1_A} 包</span>
+                              )}
+                              {getPTCGGuide(emergency.p1_A + " 包") && (
+                                <span className="text-[10px] text-slate-950 font-black mt-0.5">
+                                  {getPTCGGuide(emergency.p1_A + " 包").replace(/[()]/g, '')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-1.5 rounded border border-blue-100">
+                            <span className="text-xs font-bold text-slate-700">🥈 第二名 (2勝1敗)：</span>
+                            <div className="flex flex-col items-end">
+                              {isEmergencyEditable ? (
+                                <input
+                                  type="number"
+                                  className="w-16 border border-teal-300 rounded p-0.5 text-center text-xs font-bold bg-white"
+                                  value={overrideP2_A}
+                                  onChange={(e) => setOverrideP2_A(e.target.value)}
+                                  placeholder={emergency.p2_A}
+                                />
+                              ) : (
+                                <span className="text-sm font-bold text-blue-700">{emergency.p2_A} 包</span>
+                              )}
+                              {getPTCGGuide(emergency.p2_A + " 包") && (
+                                <span className="text-[10px] text-slate-950 font-black mt-0.5">
+                                  {getPTCGGuide(emergency.p2_A + " 包").replace(/[()]/g, '')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-100/50 p-1.5 rounded border border-slate-200/50">
+                            <span className="text-xs font-bold text-slate-500">🥉 第三名 (1勝2敗)：</span>
+                            {isEmergencyEditable ? (
+                              <input
+                                  type="number"
+                                  className="w-16 border border-teal-300 rounded p-0.5 text-center text-xs font-bold bg-white"
+                                  value={overrideP3_A}
+                                  onChange={(e) => setOverrideP3_A(e.target.value)}
+                                  placeholder={emergency.p3_A}
+                                />
+                            ) : (
+                              <span className="font-bold text-slate-600">{emergency.p3_A} 包</span>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50/50 p-1.5 rounded border border-amber-100">
+                            <span className="text-xs font-bold text-slate-700">🥇 第一名 (2勝0敗)：</span>
+                            <div className="flex flex-col items-end">
+                              {isEmergencyEditable ? (
+                                <input
+                                  type="number"
+                                  className="w-16 border border-teal-300 rounded p-0.5 text-center text-xs font-bold bg-white"
+                                  value={overrideP1_B}
+                                  onChange={(e) => setOverrideP1_B(e.target.value)}
+                                  placeholder={emergency.p1_B}
+                                />
+                              ) : (
+                                <span className="text-sm font-black text-amber-700">{emergency.p1_B} 包</span>
+                              )}
+                              {getPTCGGuide(emergency.p1_B + " 包") && (
+                                <span className="text-[10px] text-slate-950 font-black mt-0.5">
+                                  {getPTCGGuide(emergency.p1_B + " 包").replace(/[()]/g, '')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-blue-50/50 p-1.5 rounded border border-blue-100">
+                            <span className="text-xs font-bold text-slate-700">🥈 第二名 (1勝1敗)：</span>
+                            <div className="flex flex-col items-end">
+                              {isEmergencyEditable ? (
+                                <input
+                                  type="number"
+                                  className="w-16 border border-teal-300 rounded p-0.5 text-center text-xs font-bold bg-white"
+                                  value={overrideP2_B}
+                                  onChange={(e) => setOverrideP2_B(e.target.value)}
+                                  placeholder={emergency.p2_B}
+                                />
+                              ) : (
+                                <span className="text-sm font-bold text-blue-700">{emergency.p2_B} 包</span>
+                              )}
+                              {getPTCGGuide(emergency.p2_B + " 包") && (
+                                <span className="text-[10px] text-slate-950 font-black mt-0.5">
+                                  {getPTCGGuide(emergency.p2_B + " 包").replace(/[()]/g, '')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center bg-slate-100/50 p-1.5 rounded border border-slate-200/50">
+                            <span className="text-xs font-bold text-slate-500">🥉 第三名 (0勝2敗)：</span>
+                            {isEmergencyEditable ? (
+                              <input
+                                  type="number"
+                                  className="w-16 border border-teal-300 rounded p-0.5 text-center text-xs font-bold bg-white"
+                                  value={overrideP3_B}
+                                  onChange={(e) => setOverrideP3_B(e.target.value)}
+                                  placeholder={emergency.p3_B}
+                                />
+                            ) : (
+                              <span className="font-bold text-slate-600">{emergency.p3_B} 包</span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="bg-slate-50 px-3 py-1.5 border-t border-slate-100 flex justify-between items-center text-[11px] font-bold">
+                      <span className="text-slate-500">實際毛利率：</span>
+                      <span className={`text-xs font-black ${
+                        (threePlayerMode === 'A' ? emergency.margin3_A : emergency.margin3_B) >= targetMargin ? 'text-teal-600' : 'text-rose-600'
+                      }`}>
+                        {threePlayerMode === 'A' ? emergency.margin3_A.toFixed(1) : emergency.margin3_B.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* V9.9.8 警報中心解鎖，移除方案五隱藏條件 */}
+          <div className={`flex flex-col bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden min-h-0 transition-all duration-300 ${expandedSections.alertCenter ? 'flex-[2]' : 'shrink-0'}`}>
+            <div onClick={() => toggleSection('alertCenter')} className="shrink-0 bg-slate-700 px-3 py-1.5 border-b border-slate-800 text-white flex justify-between items-center text-xs cursor-pointer select-none">
+              <span>💡 營運情報與警報中心</span>
+              <div className="flex items-center gap-2">
+                {!calculations.alertData.hasAlert ? <span className="text-[10px] sm:text-xs bg-emerald-500/90 px-2 py-0.5 rounded shadow-sm">✅ 狀態健康</span> : <span className="text-[10px] sm:text-xs bg-rose-500/90 px-2 py-0.5 rounded shadow-sm animate-pulse">⚠️ 需介入</span>}
+                <ChevronIcon expanded={expandedSections.alertCenter} className="text-white" />
+              </div>
+            </div>
+
+            {expandedSections.alertCenter && (
+              <div className="flex-1 overflow-auto p-3 bg-slate-50/50 flex flex-col gap-2">
+                {calculations.alertData.hasAlert && calculations.alertData.type === 'smooth_low_margin' ? (
+                  <div className="text-xs sm:text-sm">
+                    <div className="flex items-center gap-1.5 mb-2"><span className="text-base text-rose-600">🚨</span><b className="text-rose-800">【安全獲利示警】部分人數規模毛利率低於目標：</b></div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2">
+                      {calculations.alertData.data.map((b) => {
+                        const isBottomPolicy = twoWinPolicy === 'bottom';
+                        return (
+                          <div key={b.p} className={`bg-white px-3 py-2 rounded-lg shadow-sm border ${b.r.margin < minMargin ? 'border-red-400 ring-1 ring-red-400/30' : 'border-rose-200'} flex flex-col`}>
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="text-xs sm:text-sm text-rose-700 font-bold">{rewardModel === 'custom-spec' ? b.label : `${b.p}人局 (${b.r.R}輪)`}</span>
+                              <span className="text-xs sm:text-sm font-black text-rose-900">{b.r.margin.toFixed(1)}%</span>
+                            </div>
+                            <div className="mt-1.5 pt-1.5 border-t border-dashed border-rose-200 bg-rose-50/40 rounded-b text-[10px] sm:text-xs text-rose-700 leading-normal">
+                              {b.r.margin < minMargin ? (
+                                <><b>🚨 財務告急建議：</b><br />① 將自訂報名費上調至 <b>${b.r.suggestedFee}</b> 元以保障 {targetMargin}% 毛利<br />{(!isBottomPolicy && rewardModel !== 'custom-spec') && <>② 將政策改為 <b>「併入保底」</b> 節省成本<br /></>}</>
+                              ) : (
+                                <><b>💡 營運微調建議：</b><br />① 將自訂報名費微調至 <b>${b.r.suggestedFee}</b> 元以保障 {targetMargin}% 毛利<br />{(!isBottomPolicy && rewardModel !== 'custom-spec') && <>② 將政策改為 <b>「併入保底」</b> 節省成本<br /></>}</>
                               )}
                             </div>
                           </div>
                         );
-                      }
-                      return cells;
-                    })()}
-                  </div>
-
-                  {adminSelectedDate && (
-                    <div className="mt-8 pt-6 border-t-2 border-gray-100 space-y-4 animate-in slide-in-from-top-4">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
-                        <h4 className="font-black text-gray-700 text-lg flex items-center gap-2"><Calendar className="w-6 h-6 text-orange-500" /> {adminSelectedDate.replace(/-/g, '/')} 管理清單</h4>
-                        
-                        {/* 💡 聰明的按鈕切換邏輯：根據是否為預設週二公休，顯示對應操作 */}
-                        {getClosureObj(adminSelectedDate) ? (
-                          getClosureObj(adminSelectedDate).isDefault ? (
-                            <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-5 py-2.5 bg-green-600 text-white font-black rounded-xl shadow-sm hover:bg-green-700 transition-all flex items-center justify-center gap-2 text-sm"><CheckCircle2 className="w-4 h-4"/> 設為特別營業日</button>
-                          ) : (
-                            <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-5 py-2.5 bg-gray-600 text-white font-black rounded-xl shadow-sm hover:bg-gray-700 transition-all flex items-center justify-center gap-2 text-sm"><X className="w-4 h-4"/> 解除店休</button>
-                          )
-                        ) : specialOpenings.find(o => o.date === adminSelectedDate) ? (
-                          <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-5 py-2.5 bg-orange-600 text-white font-black rounded-xl shadow-sm hover:bg-orange-700 transition-all flex items-center justify-center gap-2 text-sm"><Coffee className="w-4 h-4"/> 恢復週二公休</button>
-                        ) : (
-                          <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-xl border border-gray-200">
-                            <input type="text" value={closureReason} onChange={e => setClosureReason(e.target.value)} placeholder="原因 (預設: 店休)" className="px-3 py-2 text-sm font-bold bg-white border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-gray-400 w-32 md:w-48" />
-                            <button onClick={() => handleToggleDayStatus(adminSelectedDate)} className="px-4 py-2 bg-gray-800 text-white font-black rounded-lg shadow-sm hover:bg-black transition-all flex items-center justify-center gap-1.5 text-sm whitespace-nowrap"><Coffee className="w-4 h-4"/> 設為店休</button>
-                          </div>
-                        )}
-                      </div>
-
-                      {getClosureObj(adminSelectedDate) ? (
-                        <div className="bg-gray-100 p-8 rounded-2xl text-center border-2 border-gray-300 border-dashed flex flex-col items-center justify-center">
-                          <Coffee className="w-12 h-12 text-gray-500 mb-3" />
-                          <h3 className="text-xl font-black text-gray-800 mb-1">今日狀態：{getClosureObj(adminSelectedDate).reason}</h3>
-                          <p className="text-sm font-bold text-gray-500">解除或設定特別營業後即可排定賽事</p>
-                        </div>
-                      ) : tournaments.filter(t => t.date === adminSelectedDate).length === 0 ? (
-                        <p className="text-base text-gray-400 font-bold bg-gray-50 p-6 rounded-xl text-center border-2 border-gray-200 border-dashed">這天沒有賽事可以管理喔！</p>
-                      ) : (
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                          {tournaments.filter(t => t.date === adminSelectedDate).map(t => (
-                            editingId === t.id ? (
-                              <form key={`edit-${t.id}`} onSubmit={handleSaveEdit} className="p-6 bg-orange-50 shadow-inner rounded-2xl border-2 border-orange-300 flex flex-col gap-4">
-                                <div className="flex justify-between items-center border-b border-orange-200 pb-3"><span className="font-black text-orange-800 flex items-center gap-2 text-lg"><Edit className="w-5 h-5"/> 編輯賽事內容</span><button type="button" onClick={() => { setEditingId(null); setEditFormData(null); }} className="text-gray-400 hover:text-red-500 bg-white rounded-full p-1.5 shadow-sm transition-colors"><X className="w-5 h-5"/></button></div>
-                                <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">遊戲</label><select value={editFormData.gameType} onChange={(e) => setEditFormData({...editFormData, gameType: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">名稱</label><input required type="text" value={editFormData.title} onChange={(e) => setEditFormData({...editFormData, title: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
-                                <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">日期</label><input required type="date" value={editFormData.date} onChange={(e) => setEditFormData({...editFormData, date: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">時間</label><input required type="time" value={editFormData.time} onChange={(e) => setEditFormData({...editFormData, time: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
-                                <div><label className="text-xs font-bold text-orange-800 block mb-1.5">費用</label><input required type="text" value={editFormData.fee} onChange={(e) => setEditFormData({...editFormData, fee: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-                                
-                                <div>
-                                  <div className="flex justify-between items-end mb-2">
-                                    <label className="text-xs font-bold text-orange-800 block">備註</label>
-                                    <select onChange={(e) => { if(e.target.value) setEditFormData({...editFormData, description: e.target.value})}} className="text-xs border border-orange-200 rounded-lg p-1.5 bg-white text-orange-700 font-bold outline-none max-w-[150px] shadow-sm cursor-pointer">
-                                      <option value="">載入模板...</option>
-                                      {notePresets.map(p => <option key={p.id} value={p.content}>{p.title}</option>)}
-                                    </select>
-                                  </div>
-                                  <textarea rows="4" value={editFormData.description} onChange={(e) => setEditFormData({...editFormData, description: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold resize-none bg-white focus:ring-2 focus:ring-orange-500 outline-none leading-relaxed" />
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                  <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
-                                    <label className="text-xs font-bold text-gray-700 block mb-2 flex items-center gap-1"><ImageIcon className="w-4 h-4 text-orange-500" /> 主視覺圖</label>
-                                    <input type="file" multiple accept="image/*" onChange={async (e) => {
-                                      const newImgs = await Promise.all(Array.from(e.target.files).slice(0, 4).map(compressImage));
-                                      setEditFormData(prev => ({ ...prev, images: [...(Array.isArray(prev.images) ? prev.images : []), ...newImgs].slice(0, 4) }));
-                                    }} className="w-full p-1 text-xs text-gray-500 cursor-pointer" />
-                                    {Array.isArray(editFormData.images) && editFormData.images.length > 0 && (
-                                      <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                                        {editFormData.images.map((img, i) => (
-                                          <div key={i} className="relative inline-block flex-shrink-0">
-                                            <img src={img} className="h-12 w-auto rounded border border-gray-200 object-cover shadow-sm" />
-                                            <button type="button" onClick={() => { const ni = [...editFormData.images]; ni.splice(i, 1); setEditFormData({...editFormData, images: ni}); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md"><X className="w-3 h-3" /></button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                  
-                                  <div className="bg-yellow-50 p-3 rounded-xl border border-yellow-200 shadow-sm">
-                                    <label className="text-xs font-bold text-yellow-800 block mb-2 flex items-center gap-1"><Gift className="w-4 h-4 text-yellow-600" /> 獎品庫圖片</label>
-                                    <input type="file" multiple accept="image/*" onChange={async (e) => {
-                                      const newImgs = await Promise.all(Array.from(e.target.files).slice(0, 4).map(compressImage));
-                                      setEditFormData(prev => ({ ...prev, prizeImages: [...(Array.isArray(prev.prizeImages) ? prev.prizeImages : []), ...newImgs].slice(0, 4) }));
-                                    }} className="w-full p-1 text-xs text-yellow-700 cursor-pointer" />
-                                    {Array.isArray(editFormData.prizeImages) && editFormData.prizeImages.length > 0 && (
-                                      <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                                        {editFormData.prizeImages.map((img, i) => (
-                                          <div key={`edit-prize-${i}`} className="relative inline-block flex-shrink-0">
-                                            <img src={img} className="h-12 w-auto rounded border-2 border-yellow-300 object-cover shadow-sm" />
-                                            <button type="button" onClick={() => { const ni = [...editFormData.prizeImages]; ni.splice(i, 1); setEditFormData({...editFormData, prizeImages: ni}); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md"><X className="w-3 h-3" /></button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-
-                                <button type="submit" className="w-full py-4 mt-2 bg-orange-600 text-white font-black rounded-xl transition-all active:scale-95 flex justify-center items-center gap-2 text-lg shadow-md hover:bg-orange-700"><Save className="w-5 h-5" /> 儲存賽事變更</button>
-                              </form>
-                            ) : (
-                              <div key={t.id} className="p-5 bg-white shadow-sm rounded-2xl border border-gray-200 flex flex-col justify-between transition-all hover:border-blue-300 hover:shadow-md h-full">
-                                <div>
-                                  <span className={`px-2.5 py-1 text-xs font-black rounded-full shadow-sm inline-block mb-3 ${categories.find(c=>c.gameType===t.gameType)?.color || 'bg-gray-200'}`}>{t.gameType}</span>
-                                  <div className="font-black text-gray-800 text-lg mb-2">{t.title}</div>
-                                  <div className="text-sm text-gray-500 font-bold mb-4 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打</div>
-                                </div>
-                                <div className="flex gap-2 justify-end border-t border-gray-100 pt-4 mt-auto">
-                                  <button type="button" onClick={(e) => toggleNote(e, t.id)} className="flex-1 py-2 text-orange-600 bg-orange-50 rounded-xl hover:bg-orange-100 active:scale-95 transition-all shadow-sm font-bold text-sm" title="查看詳細資訊">詳情</button>
-                                  <button type="button" onClick={() => { 
-                                    setEditingId(t.id); 
-                                    setEditFormData({
-                                      ...t, 
-                                      images: Array.isArray(t.images) && t.images.length > 0 ? t.images : (t.image ? [t.image] : []),
-                                      prizeImages: Array.isArray(t.prizeImages) ? t.prizeImages : []
-                                    }); 
-                                  }} className="flex-1 py-2 text-blue-600 bg-blue-50 rounded-xl hover:bg-blue-100 active:scale-95 transition-all shadow-sm font-bold text-sm">編輯</button>
-                                  <button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id))} className="px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-95 transition-all shadow-sm flex justify-center"><Trash2 className="w-4 h-4"/></button>
-                                </div>
-                                
-                                {/* 後台也同步顯示展開的資訊 */}
-                                {expandedNotes[t.id] && (
-                                  <div className="w-full mt-4 pt-4 border-t border-gray-100 animate-in slide-in-from-top-2">
-                                    <ImageCarousel tournament={t} />
-                                    <div className="text-sm text-gray-600 font-bold whitespace-pre-line leading-relaxed">{renderTextWithLinks(t.description)}</div>
-                                    {t.prizeImages && t.prizeImages.length > 0 && (
-                                      <div className="mt-4 p-3.5 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200 shadow-sm">
-                                        <div className="text-sm font-black text-orange-800 mb-3 flex items-center gap-1.5"><Gift className="w-4 h-4 text-orange-500" /> 本場豪華獎勵</div>
-                                        <div className={`grid gap-2 ${t.prizeImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-                                          {t.prizeImages.map((img, i) => (
-                                            <img key={`admin-prize-${i}`} src={img} className="w-full h-auto rounded-lg border border-yellow-300 shadow-sm object-cover cursor-zoom-in hover:scale-105 transition-transform duration-300" onClick={(e) => { e.stopPropagation(); setFullscreenImage(img); }} />
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          ))}
-                        </div>
-                      )}
+                      })}
                     </div>
-                  )}
-                </div>
-
-                {/* 教學預約單 (RWD 雙欄) */}
-                <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-orange-200 mt-6 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 text-xs font-black px-4 py-2 rounded-bl-2xl shadow-sm">後台清單</div>
-                  <h2 className="text-xl md:text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><BookOpen className="w-6 h-6 md:w-8 md:h-8 text-orange-500" /> 教學預約管理</h2>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                    {reservations.length === 0 ? <div className="col-span-full text-center py-12 text-gray-400 font-bold bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">目前無人預約教學喔！</div> : reservations.map(res => (
-                      <div key={res.id} className={`p-5 rounded-2xl border transition-colors shadow-sm ${res.status === 'completed' ? 'bg-gray-50 opacity-60 border-gray-200' : 'bg-white border-orange-200 border-l-4 border-l-orange-500 hover:shadow-md'}`}>
-                        <div className="flex justify-between items-center mb-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-black bg-gray-200 px-3 py-1.5 rounded-lg shadow-sm">{res.gameType}</span>
-                            <span className={`text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm ${res.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{res.status === 'completed' ? '✅ 已處理' : '🚨 待聯絡'}</span>
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={async () => await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations', res.id), { status: res.status === 'pending' ? 'completed' : 'pending' })} className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl font-bold text-sm shadow-sm hover:bg-blue-100 active:scale-95 transition-all">切換狀態</button>
-                            <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations', res.id))} className="p-2 bg-red-50 text-red-500 rounded-xl shadow-sm hover:bg-red-100 active:scale-95 transition-all"><Trash2 className="w-5 h-5"/></button>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4 text-sm bg-white p-4 rounded-xl border border-gray-100">
-                          <div><span className="text-gray-400 block text-xs font-bold mb-1">👤 暱稱</span><span className="font-black text-gray-800 text-base">{res.name}</span></div>
-                          <div><span className="text-gray-400 block text-xs font-bold mb-1">📱 聯絡</span><span className="font-black text-gray-800 text-base">{res.contact}</span></div>
-                          <div className="col-span-2 border-t border-gray-100 pt-3 mt-1"><span className="text-gray-400 block text-xs font-bold mb-1">🗓️ 期望時間</span><span className="font-black text-orange-600 text-base">{res.date} {res.time}</span></div>
-                        </div>
-                      </div>
-                    ))}
                   </div>
-                </div>
-
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 opacity-90 my-1">
+                    <span className="text-3xl mb-1.5">🛡️</span><h3 className="text-xs sm:text-sm font-bold text-slate-500 mb-0.5">營運狀態健康無虞</h3>
+                    <p className="text-[10px] sm:text-xs text-center leading-relaxed">當前賽事產品線的獲利防線固若金湯，店長請放心開賽！</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
-      </main>
 
-      {/* 🔍 全域放大圖片懸浮視窗 */}
-      {fullscreenImage && (
-        <div 
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200"
-          onClick={() => setFullscreenImage(null)}
-        >
-          <div className="relative max-w-full max-h-full flex flex-col items-center">
-            <button 
-              className="absolute -top-14 right-0 text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-2.5 rounded-full transition-all border border-white/20"
-              onClick={() => setFullscreenImage(null)}
-              title="關閉放大"
-            >
-              <X className="w-6 h-6" />
-            </button>
-            <img 
-              src={fullscreenImage} 
-              alt="放大預覽" 
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] animate-in zoom-in-95 duration-300 cursor-zoom-out border-2 border-white/10" 
-              onClick={(e) => {
-                e.stopPropagation();
-                setFullscreenImage(null);
-              }} 
-            />
+        </div>
+
+        {/* 右側容器：全景邊界壓力測試表 */}
+        <div className="flex-[2] flex flex-col bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden min-h-[300px] lg:min-h-0">
+          <div className={`shrink-0 px-3 py-1.5 border-b text-white flex justify-between items-center text-xs ${rewardModel === 'custom-spec' ? 'bg-indigo-950 border-indigo-900' : 'bg-slate-700 border-slate-800'}`}>
+            <span className="font-bold tracking-wide sm:text-sm">二、全景邊界護盤監控</span>
+            <span className="text-[10px] sm:text-xs bg-black/30 px-2 py-0.5 rounded font-medium shadow-sm">目標毛利 ≥ {targetMargin}%</span>
+          </div>
+          <div className="flex-1 overflow-auto">
+            <table className="w-full text-xs text-center border-collapse">
+              <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10 shadow-sm">
+                <tr><th className="py-2 px-2 border-r border-slate-200 font-bold bg-slate-50 text-xs sm:text-sm">人數情境</th><th className="py-2 px-2 border-r border-slate-200 font-bold bg-slate-50 w-16 text-xs sm:text-sm">營收</th><th className="py-2 px-2 border-r border-slate-200 font-bold bg-slate-50 w-16 text-xs sm:text-sm">成本</th><th className="py-2 px-2 font-bold bg-slate-50 w-16 text-xs sm:text-sm">毛利</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
+                {rewardModel === 'custom-spec' ? (
+                  <><tr className="bg-indigo-50/80 cursor-default"><td colSpan="4" className="py-2 px-3 border-y border-indigo-100 text-left"><span className="font-bold text-indigo-800 text-xs tracking-wider">🏆 雙軌規格賽 獨立損益監控看板</span></td></tr>{calculations.stressTests.map(renderStressTestRow)}</>
+                ) : rewardModel === 'official-gym' ? (
+                  <><tr className="bg-slate-100/80 hover:bg-slate-200/60 transition-colors cursor-pointer" onClick={() => toggleSection('round3')}><td colSpan="4" className="py-1.5 px-3 border-y border-slate-200"><div className="flex justify-between items-center select-none"><span className="font-bold text-slate-600 text-xs tracking-wider">🔵 官方道館賽 實時里程碑成本核算</span><ChevronIcon expanded={expandedSections.round3} /></div></td></tr>{expandedSections.round3 && calculations.stressTests.map(renderStressTestRow)}</>
+                ) : (
+                  <><tr className="bg-slate-100/80 hover:bg-slate-200/60 transition-colors cursor-pointer" onClick={() => toggleSection('round3')}><td colSpan="4" className="py-1.5 px-3 border-y border-slate-200"><div className="flex justify-between items-center select-none"><span className="font-bold text-slate-600 text-xs tracking-wider">📍 常規及臨界規模測試分析</span><ChevronIcon expanded={expandedSections.round3} /></div></td></tr>{expandedSections.round3 && calculations.stressTests.map(renderStressTestRow)}</>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="shrink-0 p-2 bg-orange-50/80 border-t border-orange-200/50 text-[10px] sm:text-xs text-orange-800 font-semibold text-center">
+            💡 提示：系統已全面實裝【瑞士制非線性對戰查找表】，奇數輪空（Bye）的利潤稀釋已 100% 精準代入，拒絕線性預估泡沫！
           </div>
         </div>
-      )}
-      
-      {/* 💡 全域 Toast 提示 */}
-      {toastMsg && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] animate-in slide-in-from-bottom-4 fade-in duration-300">
-          <div className="bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl font-bold flex items-center gap-2 border border-gray-700">
-            {toastMsg}
-          </div>
-        </div>
-      )}
+
+      </div>
     </div>
   );
 }
