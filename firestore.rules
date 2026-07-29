@@ -1,0 +1,103 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isGoogleUser() {
+      return isSignedIn()
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    // Transitional UID allowlist. Keep this synchronized with the frontend env.
+    // A later custom-claims migration can use request.auth.token.admin == true.
+    function isAdmin() {
+      return isGoogleUser()
+        && request.auth.uid in [
+          'z1JOoARRRsSFavRlGbnhZmM4NMQ2'
+        ];
+    }
+
+    function isValidReservationCreate() {
+      let data = request.resource.data;
+      return isSignedIn()
+        && data.keys().hasAll([
+          'gameType',
+          'date',
+          'time',
+          'name',
+          'contact',
+          'status',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'gameType',
+          'date',
+          'time',
+          'name',
+          'contact',
+          'status',
+          'createdAt'
+        ])
+        && data.gameType is string
+        && data.gameType.size() >= 1
+        && data.gameType.size() <= 40
+        && data.date is string
+        && data.date.size() == 10
+        && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.time is string
+        && data.time.size() == 5
+        && data.time.matches('^[0-9]{2}:[0-9]{2}$')
+        && data.time >= '13:00'
+        && data.time <= '21:00'
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 60
+        && data.contact is string
+        && data.contact.size() >= 1
+        && data.contact.size() <= 120
+        && data.status == 'pending'
+        && data.createdAt == request.time;
+    }
+
+    match /artifacts/{appId}/public/data/monster_tournaments/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/{appId}/public/data/game_categories/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/{appId}/public/data/tutorial_banners/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/{appId}/public/data/store_closures/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/{appId}/public/data/special_openings/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/{appId}/public/data/note_presets/{documentId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/{appId}/public/data/tutorial_reservations/{documentId} {
+      allow create: if isValidReservationCreate();
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

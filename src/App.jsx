@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info } from 'lucide-react';
+import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -19,13 +20,14 @@ const myFirebaseConfig = {
 
 const GAS_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbywkOTGBA5hh_vGfK2xHy2YE4uMnQNqbWrAHHtiB3wPoKWJJ9xu2IJqND-CqGHdu8d_/exec";
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
+const injectedFirebaseConfig = globalThis.__firebase_config;
+const firebaseConfig = injectedFirebaseConfig ? JSON.parse(injectedFirebaseConfig) : myFirebaseConfig;
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
 // 🔒 特助終極修復：精準抓取環境變數，過濾掉 _src 等後綴，完美對齊 Firebase 的安全權限要求！
-const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'kaijuzaocard-main';
+const rawAppId = globalThis.__app_id ? String(globalThis.__app_id) : 'kaijuzaocard-main';
 const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
 const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
 
@@ -44,9 +46,8 @@ export default function App() {
   ];
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
-  const [isAdminAuth, setIsAdminAuth] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [pwdError, setPwdError] = useState(false);
+  const [isAdminSigningIn, setIsAdminSigningIn] = useState(false);
+  const [adminLoginError, setAdminLoginError] = useState('');
   const [weekStartsOnMonday, setWeekStartsOnMonday] = useState(false);
 
   const [playerFilters, setPlayerFilters] = useState(['All']);
@@ -75,6 +76,7 @@ export default function App() {
 
   const [reserveForm, setReserveForm] = useState({ gameType: '', date: '', time: '', name: '', contact: '' });
   const [reserveSuccess, setReserveSuccess] = useState(false);
+  const [isSubmittingReservation, setIsSubmittingReservation] = useState(false);
 
   const [tutorialBanners, setTutorialBanners] = useState([]);
   const [newTutorialBanner, setNewTutorialBanner] = useState({ title: '', url: '' });
@@ -96,6 +98,7 @@ export default function App() {
 
   const categoryScrollRef = useRef(null);
   const hasRandomizedBanner = useRef(false);
+  const isAdminAuth = isFirebaseAdmin(user);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -114,16 +117,23 @@ export default function App() {
     } : data;
 
     try {
-      await fetch(GAS_WEBHOOK_URL, {
+      const response = await fetch(GAS_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payloadData)
       });
-      
+
+      if (!response.ok) {
+        throw new Error(`GAS_HTTP_${response.status}`);
+      }
+
       if (isTest) showToast("🎉 GAS 轉發測試成功！請檢查您的 Google 試算表與 LINE 群組。");
+      return { ok: true };
     } catch (err) {
-      console.error("GAS 轉發失敗:", err);
-      if (isTest) showToast("❌ 發送失敗，請檢查網路狀況。");
+      const errorCode = err?.message || 'GAS_NOTIFICATION_FAILED';
+      console.error("GAS 轉發失敗:", { code: errorCode });
+      if (isTest) showToast(`❌ 通知測試失敗（${errorCode}），請檢查 GAS 狀態。`);
+      return { ok: false, errorCode };
     } finally {
       setIsSendingLine(false);
     }
@@ -139,10 +149,10 @@ export default function App() {
   useEffect(() => {
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        if (globalThis.__initial_auth_token) {
           try {
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } catch (e) {
+            await signInWithCustomToken(auth, globalThis.__initial_auth_token);
+          } catch {
             console.warn("Custom token failed, falling back to anonymous");
             await signInAnonymously(auth);
           }
@@ -169,7 +179,7 @@ export default function App() {
     
     const unsubs = [];
     let loadedCount = 0;
-    const totalCollections = 7; 
+    const totalCollections = 5;
 
     const checkAllLoaded = () => {
       loadedCount++;
@@ -217,12 +227,6 @@ export default function App() {
       }
     });
 
-    setupListener(getCollection('note_presets'), setNotePresets);
-
-    setupListener(getCollection('tutorial_reservations'), setReservations, (data) =>
-      data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    );
-
     setupListener(getCollection('tutorial_banners'), setTutorialBanners, (data) =>
       data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     );
@@ -232,6 +236,50 @@ export default function App() {
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
+
+  useEffect(() => {
+    if (!isAdminAuth) {
+      setNotePresets([]);
+      setReservations([]);
+      return undefined;
+    }
+
+    const getAdminCollection = (collectionName) =>
+      collection(db, 'artifacts', appId, 'public', 'data', collectionName);
+
+    const unsubscribePresets = onSnapshot(
+      getAdminCollection('note_presets'),
+      (snapshot) => setNotePresets(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+      (error) => {
+        console.error('讀取管理員備註模板失敗:', { code: error.code, message: error.message });
+        setNotePresets([]);
+      }
+    );
+
+    const unsubscribeReservations = onSnapshot(
+      getAdminCollection('tutorial_reservations'),
+      (snapshot) => {
+        const toMillis = (value) => {
+          if (value && typeof value.toMillis === 'function') return value.toMillis();
+          const parsed = Date.parse(value);
+          return Number.isNaN(parsed) ? 0 : parsed;
+        };
+        const data = snapshot.docs
+          .map((item) => ({ id: item.id, ...item.data() }))
+          .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+        setReservations(data);
+      },
+      (error) => {
+        console.error('讀取管理員預約資料失敗:', { code: error.code, message: error.message });
+        setReservations([]);
+      }
+    );
+
+    return () => {
+      unsubscribePresets();
+      unsubscribeReservations();
+    };
+  }, [isAdminAuth]);
 
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
@@ -296,10 +344,41 @@ export default function App() {
     });
   };
 
-  const handleAdminLogin = (e) => {
-    e.preventDefault();
-    if (passwordInput === 'monster113') { setIsAdminAuth(true); setPwdError(false); setPasswordInput(''); }
-    else { setPwdError(true); setPasswordInput(''); }
+  const handleAdminLogin = async () => {
+    setIsAdminSigningIn(true);
+    setAdminLoginError('');
+
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, provider);
+
+      if (result.user.isAnonymous || !result.user.email) {
+        throw new Error('GOOGLE_ACCOUNT_REQUIRED');
+      }
+
+      if (!isFirebaseAdmin(result.user)) {
+        setAdminLoginError('Google 登入成功，但此 UID 尚未加入管理員 allowlist。');
+      }
+    } catch (error) {
+      const code = error?.code || error?.message || 'ADMIN_SIGN_IN_FAILED';
+      console.error('Google 管理員登入失敗:', { code });
+      setAdminLoginError(`Google 管理員登入失敗（${code}）。`);
+    } finally {
+      setIsAdminSigningIn(false);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    setAdminLoginError('');
+    try {
+      await signOut(auth);
+      await signInAnonymously(auth);
+    } catch (error) {
+      const code = error?.code || 'ADMIN_SIGN_OUT_FAILED';
+      console.error('管理員登出失敗:', { code });
+      setAdminLoginError(`登出後恢復匿名模式失敗（${code}），請重新整理頁面。`);
+    }
   };
 
   const togglePlayerFilter = (id) => {
@@ -360,32 +439,63 @@ export default function App() {
 
   const handleReserveSubmit = async (e) => {
     e.preventDefault();
-    if (!user || !reserveForm.name || !reserveForm.contact) return;
+    if (!user || isSubmittingReservation) return;
 
-    const closureObj = getClosureObj(reserveForm.date);
+    const normalizedReservation = {
+      gameType: (reserveForm.gameType || categories[0]?.gameType || '未指定').trim(),
+      date: reserveForm.date.trim(),
+      time: reserveForm.time.trim(),
+      name: reserveForm.name.trim(),
+      contact: reserveForm.contact.trim()
+    };
+
+    if (!normalizedReservation.name || !normalizedReservation.contact) {
+      showToast('❌ 請填寫暱稱與聯絡方式。');
+      return;
+    }
+
+    const closureObj = getClosureObj(normalizedReservation.date);
     if (closureObj) {
       showToast(`⛔ 拍謝啦！這天基地剛好【${closureObj.reason}】，請改約其他天來玩喔！`);
       return;
     }
 
-    if (reserveForm.time < '13:00' || reserveForm.time > '21:00') {
+    if (normalizedReservation.time < '13:00' || normalizedReservation.time > '21:00') {
       showToast('⏰ 現場教學時間為 13:00~21:00，請重新選擇時段喔！');
       return;
     }
 
+    setIsSubmittingReservation(true);
     try {
-      const reserveData = { 
-        ...reserveForm, 
-        gameType: reserveForm.gameType || (categories[0]?.gameType || '未指定'),
-        status: 'pending', 
-        createdAt: new Date().toISOString() 
+      const reserveData = {
+        ...normalizedReservation,
+        status: 'pending',
+        createdAt: serverTimestamp()
       };
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tutorial_reservations'), reserveData);
-      await sendLineNotification(reserveData); 
+
       setReserveSuccess(true);
       setReserveForm(prev => ({ ...prev, date: '', time: '', name: '', contact: '' }));
-      setTimeout(() => setReserveSuccess(false), 8000); 
-    } catch (error) { console.error(error); }
+      setTimeout(() => setReserveSuccess(false), 8000);
+
+      const notificationResult = await sendLineNotification({
+        ...normalizedReservation,
+        status: 'pending'
+      });
+      if (!notificationResult.ok) {
+        showToast(`⚠️ 預約已建立，但通知未送達（${notificationResult.errorCode}）。店家仍可在後台看到預約。`);
+      }
+    } catch (error) {
+      const code = error?.code || 'RESERVATION_CREATE_FAILED';
+      console.error('建立新手預約失敗:', { code, message: error?.message });
+      if (code === 'permission-denied') {
+        showToast('❌ 預約未送出：目前沒有建立預約的權限，請重新整理後再試。');
+      } else {
+        showToast(`❌ 預約未送出（${code}），請稍後再試。`);
+      }
+    } finally {
+      setIsSubmittingReservation(false);
+    }
   };
 
   const handleAddCategory = async (e) => {
@@ -977,9 +1087,9 @@ export default function App() {
                             <input required type="time" min="13:00" max="21:00" value={reserveForm.time} onChange={e => { const t = e.target.value; if(t && (t < '13:00' || t > '21:00')) { showToast('⏰ 教學時間為 13:00~21:00，請重新選擇！'); setReserveForm({...reserveForm, time: ''}); } else { setReserveForm({...reserveForm, time: t}); } }} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" />
                           </div>
                         </div>
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><User className="w-4 h-4"/> 您的暱稱</label><input required type="text" placeholder="怎麼稱呼您呢" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
-                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><Phone className="w-4 h-4"/> 聯絡方式</label><input required type="text" placeholder="LINE ID 或 手機號碼" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
-                        <button type="submit" disabled={isSendingLine} className="w-full py-4 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all mt-2 text-lg flex items-center justify-center gap-2">{isSendingLine ? '⏳ 傳送中，請稍候...' : '送出預約！🚀'}</button>
+                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><User className="w-4 h-4"/> 您的暱稱</label><input required maxLength={60} type="text" placeholder="怎麼稱呼您呢" value={reserveForm.name} onChange={e => setReserveForm({...reserveForm, name: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
+                        <div><label className="text-xs font-bold text-gray-600 block mb-1.5 flex items-center gap-1"><Phone className="w-4 h-4"/> 聯絡方式</label><input required maxLength={120} type="text" placeholder="LINE ID 或 手機號碼" value={reserveForm.contact} onChange={e => setReserveForm({...reserveForm, contact: e.target.value})} className="w-full p-3.5 border border-gray-300 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none transition-shadow" /></div>
+                        <button type="submit" disabled={isSubmittingReservation} className="w-full py-4 bg-orange-600 text-white font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all mt-2 text-lg flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">{isSubmittingReservation ? '⏳ 建立預約中...' : '送出預約！🚀'}</button>
                       </form>
                     )}
                   </div>
@@ -998,19 +1108,34 @@ export default function App() {
             {!isAdminAuth ? (
               <div className="max-w-md mx-auto bg-white rounded-2xl p-8 shadow-sm border border-gray-200 text-center mt-10">
                 <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner"><Lock className="w-10 h-10 text-orange-600" /></div>
-                <h2 className="text-2xl font-black text-gray-800 mb-2">店長密碼驗證</h2>
-                <p className="text-sm text-gray-500 mb-6 font-bold">請輸入專屬密碼以解鎖基地後台</p>
-                <form onSubmit={handleAdminLogin} className="space-y-4">
-                  <input type="password" placeholder="請輸入密碼..." className={`w-full p-4 border rounded-xl text-center font-bold focus:ring-2 focus:ring-orange-500 outline-none transition-colors ${pwdError ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50'}`} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setPwdError(false); }} />
-                  {pwdError && <p className="text-red-500 text-sm font-bold animate-pulse">密碼錯誤，請重新輸入！</p>}
-                  <button type="submit" className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all">登入管理後台</button>
-                </form>
+                <h2 className="text-2xl font-black text-gray-800 mb-2">Google 管理員登入</h2>
+                <p className="text-sm text-gray-500 mb-5 font-bold">後台只允許 Firebase 管理員 UID，匿名帳號不具備管理權限。</p>
+
+                {!user?.isAnonymous && user?.uid && (
+                  <div className="text-left bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4 text-xs font-bold text-gray-600 space-y-2 break-all">
+                    <div>目前 Email：{user.email || '未取得'}</div>
+                    <div>目前 UID：{user.uid}</div>
+                    <div>Firestore 管理員權限：不具備</div>
+                  </div>
+                )}
+
+                {FIREBASE_ADMIN_UIDS.length === 0 && (
+                  <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs font-bold">
+                    尚未設定 VITE_FIREBASE_ADMIN_UIDS。Google 登入後會顯示 UID，但不會開放後台。
+                  </p>
+                )}
+
+                {adminLoginError && <p className="text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-sm font-bold break-words">{adminLoginError}</p>}
+
+                <button type="button" onClick={handleAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
+                  {isAdminSigningIn ? 'Google 登入中...' : '使用 Google 管理員帳號登入'}
+                </button>
               </div>
             ) : (
               <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
                 <div className="flex justify-between items-center bg-orange-100 p-5 md:p-6 rounded-2xl border border-orange-200 shadow-sm">
                   <span className="font-black text-orange-800 flex items-center gap-2 text-xl md:text-2xl"><Store className="w-6 h-6 md:w-8 md:h-8" /> 基地後台指揮中心</span>
-                  <button onClick={() => setIsAdminAuth(false)} className="bg-white text-orange-600 p-2.5 md:p-3 rounded-xl shadow-sm hover:bg-orange-50 active:scale-90 transition-all font-bold flex items-center gap-2">
+                  <button onClick={handleAdminLogout} className="bg-white text-orange-600 p-2.5 md:p-3 rounded-xl shadow-sm hover:bg-orange-50 active:scale-90 transition-all font-bold flex items-center gap-2">
                     <LogOut className="w-5 h-5 md:w-6 md:h-6" /> <span className="hidden md:inline">登出</span>
                   </button>
                 </div>
