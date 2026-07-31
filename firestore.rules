@@ -87,6 +87,22 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // Public catalog data. Keep writes server/admin-controlled; the catalog's
+    // client-side password is not an authorization boundary.
+    match /artifacts/kaijuzaocard-catalog/public/data/product_categories/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/kaijuzaocard-catalog/public/data/monster_products/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/kaijuzaocard-catalog/public/data/note_templates/{documentId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
     match /artifacts/{appId}/public/data/note_presets/{documentId} {
       allow read, create, update, delete: if isAdmin();
     }

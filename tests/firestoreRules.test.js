@@ -19,11 +19,13 @@ import {
 
 const PROJECT_ID = 'demo-kaijuzaocard-calendar';
 const APP_ID = 'kaijuzaocard-main';
+const CATALOG_APP_ID = 'kaijuzaocard-catalog';
 const ADMIN_UID = String(process.env.VITE_FIREBASE_ADMIN_UIDS || '')
   .split(',')
   .map((uid) => uid.trim())
   .filter(Boolean)[0];
 const DATA_ROOT = `artifacts/${APP_ID}/public/data`;
+const CATALOG_DATA_ROOT = `artifacts/${CATALOG_APP_ID}/public/data`;
 
 let testEnv;
 const rulesPath = fileURLToPath(new URL('../firestore.rules', import.meta.url));
@@ -36,6 +38,10 @@ function parseEmulatorAddress() {
   const [host = '127.0.0.1', rawPort = '8080'] =
     String(process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080').split(':');
   return { host, port: Number(rawPort) };
+}
+
+function unauthenticatedDb() {
+  return testEnv.unauthenticatedContext().firestore();
 }
 
 function anonymousDb(uid = 'anonymous-user') {
@@ -123,6 +129,107 @@ describe('public tournament collections', () => {
       doc(db, `${DATA_ROOT}/monster_tournaments/anonymous-admin-attempt`),
       { title: 'Denied' }
     ));
+  });
+});
+
+describe('public catalog collections', () => {
+  test('unauthenticated visitors can read product_categories and monster_products', async () => {
+    const categoriesPath = `${CATALOG_DATA_ROOT}/product_categories/category-1`;
+    const productsPath = `${CATALOG_DATA_ROOT}/monster_products/product-1`;
+    await seed(categoriesPath, { name: 'Cards' });
+    await seed(productsPath, { name: 'Public product', status: 'instock' });
+    const db = unauthenticatedDb();
+
+    await assertSucceeds(getDoc(doc(db, categoriesPath)));
+    await assertSucceeds(getDocs(collection(db, `${CATALOG_DATA_ROOT}/product_categories`)));
+    await assertSucceeds(getDoc(doc(db, productsPath)));
+    await assertSucceeds(getDocs(collection(db, `${CATALOG_DATA_ROOT}/monster_products`)));
+  });
+
+  test('unauthenticated visitors cannot create, update, or delete catalog data', async () => {
+    const db = unauthenticatedDb();
+    const categoryPath = `${CATALOG_DATA_ROOT}/product_categories/category-1`;
+    const productPath = `${CATALOG_DATA_ROOT}/monster_products/product-1`;
+    await seed(categoryPath, { name: 'Cards' });
+    await seed(productPath, { name: 'Public product' });
+
+    await assertFails(setDoc(
+      doc(db, `${CATALOG_DATA_ROOT}/product_categories/category-2`),
+      { name: 'Injected' }
+    ));
+    await assertFails(updateDoc(doc(db, categoryPath), { name: 'Changed' }));
+    await assertFails(deleteDoc(doc(db, categoryPath)));
+    await assertFails(setDoc(
+      doc(db, `${CATALOG_DATA_ROOT}/monster_products/product-2`),
+      { name: 'Injected' }
+    ));
+    await assertFails(updateDoc(doc(db, productPath), { name: 'Changed' }));
+    await assertFails(deleteDoc(doc(db, productPath)));
+  });
+
+  test('anonymous Firebase users cannot write catalog data', async () => {
+    const db = anonymousDb();
+    const categoryPath = `${CATALOG_DATA_ROOT}/product_categories/category-1`;
+    const productPath = `${CATALOG_DATA_ROOT}/monster_products/product-1`;
+    await seed(categoryPath, { name: 'Cards' });
+    await seed(productPath, { name: 'Public product' });
+
+    await assertFails(setDoc(
+      doc(db, `${CATALOG_DATA_ROOT}/product_categories/category-2`),
+      { name: 'Injected' }
+    ));
+    await assertFails(updateDoc(doc(db, categoryPath), { name: 'Changed' }));
+    await assertFails(deleteDoc(doc(db, categoryPath)));
+    await assertFails(setDoc(
+      doc(db, `${CATALOG_DATA_ROOT}/monster_products/product-2`),
+      { name: 'Injected' }
+    ));
+    await assertFails(updateDoc(doc(db, productPath), { name: 'Changed' }));
+    await assertFails(deleteDoc(doc(db, productPath)));
+  });
+
+  test('allowlisted Google administrators can manage catalog data', async () => {
+    const db = adminDb();
+    const categoryPath = `${CATALOG_DATA_ROOT}/product_categories/admin-category`;
+    const productPath = `${CATALOG_DATA_ROOT}/monster_products/admin-product`;
+
+    await assertSucceeds(setDoc(doc(db, categoryPath), { name: 'Cards' }));
+    await assertSucceeds(updateDoc(doc(db, categoryPath), { name: 'Updated cards' }));
+    await assertSucceeds(deleteDoc(doc(db, categoryPath)));
+
+    await assertSucceeds(setDoc(
+      doc(db, productPath),
+      { name: 'Admin product', status: 'instock' }
+    ));
+    await assertSucceeds(updateDoc(doc(db, productPath), { name: 'Updated product' }));
+    await assertSucceeds(deleteDoc(doc(db, productPath)));
+  });
+
+  test('note_templates remain private to allowlisted Google administrators', async () => {
+    const path = `${CATALOG_DATA_ROOT}/note_templates/template-1`;
+    await seed(path, { text: 'Admin template' });
+
+    await assertFails(getDoc(doc(unauthenticatedDb(), path)));
+    await assertFails(getDocs(collection(
+      anonymousDb(),
+      `${CATALOG_DATA_ROOT}/note_templates`
+    )));
+
+    const db = adminDb();
+    await assertSucceeds(getDoc(doc(db, path)));
+    await assertSucceeds(setDoc(
+      doc(db, `${CATALOG_DATA_ROOT}/note_templates/template-2`),
+      { text: 'Created by admin' }
+    ));
+    await assertSucceeds(updateDoc(doc(db, path), { text: 'Updated by admin' }));
+    await assertSucceeds(deleteDoc(doc(db, path)));
+  });
+
+  test('catalog permissions do not apply to another appId', async () => {
+    const path = `${DATA_ROOT}/monster_products/product-1`;
+    await seed(path, { name: 'Wrong app product' });
+
+    await assertFails(getDoc(doc(unauthenticatedDb(), path)));
   });
 });
 
