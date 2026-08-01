@@ -38,6 +38,12 @@ const CANCELLED_MESSAGE_KEYS = Object.freeze([
   'handoffId',
   'calendarEventId',
 ]);
+const CANCELLED_RETURN_KEYS = Object.freeze([
+  'type',
+  'schemaVersion',
+  'handoffId',
+  'calendarEventId',
+]);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const SAFE_GAME_CODE = /^(?:ptcg|ucg|godzilla|nivel|other|custom_[a-z0-9][a-z0-9_-]{0,56})$/;
 
@@ -212,6 +218,35 @@ export function validateSwissCancelledMessage(event, options = {}) {
     return { ok: false, error: 'CALENDAR_EVENT_MISMATCH' };
   }
   return { ok: true, value: data };
+}
+
+export function parseSwissCancelledReturnUrl(rawUrl, options = {}) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.origin !== options.expectedOrigin) return { ok: false, error: 'UNTRUSTED_RETURN_ORIGIN' };
+    const params = new URLSearchParams(url.hash.replace(/^#/, ''));
+    const entries = Array.from(params.entries());
+    const data = Object.fromEntries(entries);
+    if (entries.length !== CANCELLED_RETURN_KEYS.length || !exactKeys(data, CANCELLED_RETURN_KEYS)) {
+      return { ok: false, error: 'INVALID_MESSAGE_FIELDS' };
+    }
+    if (data.schemaVersion !== String(CALENDAR_TO_SWISS_SCHEMA_VERSION)) {
+      return { ok: false, error: 'INVALID_MESSAGE_CONTRACT' };
+    }
+    const event = {
+      origin: options.swissOrigin,
+      source: options.expectedWindow,
+      data: { ...data, schemaVersion: Number(data.schemaVersion) },
+    };
+    return validateSwissCancelledMessage(event, {
+      allowedOrigins: new Set([options.swissOrigin]),
+      expectedWindow: options.expectedWindow,
+      expectedHandoffId: options.expectedHandoffId,
+      expectedCalendarEventId: options.expectedCalendarEventId,
+    });
+  } catch {
+    return { ok: false, error: 'INVALID_RETURN_URL' };
+  }
 }
 
 export function claimSwissHandoffMessage(event, { pendingSessions, allowedOrigins } = {}) {

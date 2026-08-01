@@ -12,6 +12,7 @@ import {
   normalizeCalendarGameCode,
   normalizeTournamentIntegrationFields,
   parseAllowedOrigins,
+  parseSwissCancelledReturnUrl,
 } from './utils/swissHandoff.js';
 
 // ==========================================
@@ -221,6 +222,21 @@ export default function App() {
       };
       pendingSwissRef.current.set(payload.handoffId, pending);
       const timer = setInterval(() => {
+        let popupUrl = '';
+        try { popupUrl = popup.location.href; } catch { /* cross-origin popup is still active */ }
+        const returnedCancellation = popupUrl && parseSwissCancelledReturnUrl(popupUrl, {
+          expectedOrigin: window.location.origin,
+          swissOrigin: new URL(swissAppUrl).origin,
+          expectedWindow: popup,
+          expectedHandoffId: payload.handoffId,
+          expectedCalendarEventId: tournamentItem.id,
+        });
+        if (returnedCancellation?.ok) {
+          setSwissStatus(tournamentItem.id, 'idle');
+          clearPendingSwissPopup(payload.handoffId);
+          popup.close();
+          return;
+        }
         if (!popup.closed) return;
         const current = pendingSwissRef.current.get(payload.handoffId);
         if (current?.calendarEventId === tournamentItem.id && current.action === 'create') {

@@ -12,6 +12,7 @@ import {
   normalizeCalendarGameCode,
   normalizeTournamentIntegrationFields,
   parseAllowedOrigins,
+  parseSwissCancelledReturnUrl,
   validateSwissCancelledMessage,
   validateSwissCreatedMessage,
 } from '../src/utils/swissHandoff.js';
@@ -142,6 +143,25 @@ test('accepts only an exact cancellation from the expected Swiss popup', () => {
   assert.equal(validateSwissCancelledMessage({ ...good, data: { ...good.data, tournamentId: 'forbidden' } }, options).ok, false);
 });
 
+test('accepts a protected-preview cancellation return only from the expected popup URL', () => {
+  const popup = {};
+  const options = {
+    expectedOrigin: 'https://calendar.example',
+    swissOrigin: 'https://swiss.example',
+    expectedWindow: popup,
+    expectedHandoffId: HANDOFF_ID,
+    expectedCalendarEventId: 'calendar-event-1',
+  };
+  const valid = 'https://calendar.example/#type=KJZC_SWISS_CANCELLED_V1&schemaVersion=1&handoffId=handoff-1&calendarEventId=calendar-event-1';
+  assert.equal(parseSwissCancelledReturnUrl(valid, options).ok, true);
+  assert.equal(parseSwissCancelledReturnUrl(valid.replace('calendar.example', 'evil.example'), options).ok, false);
+  assert.equal(parseSwissCancelledReturnUrl(`${valid}&uid=forbidden`, options).ok, false);
+  assert.equal(parseSwissCancelledReturnUrl(`${valid}&handoffId=handoff-1`, options).ok, false);
+  assert.equal(parseSwissCancelledReturnUrl(valid.replace('schemaVersion=1', 'schemaVersion=01'), options).ok, false);
+  assert.equal(parseSwissCancelledReturnUrl(valid.replace('handoff-1', 'stale-handoff'), options).ok, false);
+  assert.equal(parseSwissCancelledReturnUrl(valid.replace('calendar-event-1', 'other-event'), options).ok, false);
+});
+
 test('a handoff session settles once and parallel or stale messages cannot cross-match', () => {
   const popupA = {};
   const popupB = {};
@@ -222,6 +242,9 @@ test('App wires success-only persistence, popup failure and manual unlink confir
   assert.match(source, /if \(message\.kind === 'cancelled'\)[\s\S]*?return;[\s\S]*?await runTransaction/);
   assert.match(source, /swissTournamentId:\s*message\.value\.tournamentId/);
   assert.match(source, /if \(!popup\)/);
+  assert.match(source, /parseSwissCancelledReturnUrl\(popupUrl/);
+  assert.match(source, /if \(returnedCancellation\?\.ok\)[\s\S]*?setSwissStatus\(tournamentItem\.id, 'idle'\);[\s\S]*?popup\.close\(\)/);
+  assert.match(source, /if \(!popup\.closed\) return;/);
   assert.match(source, /confirm\('確定要清除這場活動的瑞士制關聯/);
   assert.match(source, /isAdminAuth &&/);
   assert.match(source, /開啟瑞士制賽事/);
