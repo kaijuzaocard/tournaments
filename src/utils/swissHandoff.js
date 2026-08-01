@@ -1,5 +1,6 @@
 export const CALENDAR_TO_SWISS_SCHEMA_VERSION = 1;
 export const SWISS_CREATED_MESSAGE_TYPE = 'KJZC_SWISS_CREATED_V1';
+export const SWISS_CANCELLED_MESSAGE_TYPE = 'KJZC_SWISS_CANCELLED_V1';
 export const DEFAULT_SWISS_APP_URL = 'https://swiss-tournament-one.vercel.app/';
 export const MAX_HANDOFF_BYTES = 2048;
 
@@ -30,6 +31,12 @@ const CREATED_MESSAGE_KEYS = Object.freeze([
   'handoffId',
   'calendarEventId',
   'tournamentId',
+]);
+const CANCELLED_MESSAGE_KEYS = Object.freeze([
+  'type',
+  'schemaVersion',
+  'handoffId',
+  'calendarEventId',
 ]);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const SAFE_GAME_CODE = /^(?:ptcg|ucg|godzilla|nivel|other|custom_[a-z0-9][a-z0-9_-]{0,56})$/;
@@ -184,6 +191,55 @@ export function validateSwissCreatedMessage(event, options = {}) {
     return { ok: false, error: 'CALENDAR_EVENT_MISMATCH' };
   }
   return { ok: true, value: data };
+}
+
+export function validateSwissCancelledMessage(event, options = {}) {
+  const data = event?.data;
+  if (!options.allowedOrigins?.has(event?.origin)) return { ok: false, error: 'UNTRUSTED_ORIGIN' };
+  if (options.expectedWindow && event?.source !== options.expectedWindow) return { ok: false, error: 'UNTRUSTED_WINDOW' };
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !exactKeys(data, CANCELLED_MESSAGE_KEYS)) {
+    return { ok: false, error: 'INVALID_MESSAGE_FIELDS' };
+  }
+  if (data.type !== SWISS_CANCELLED_MESSAGE_TYPE || data.schemaVersion !== CALENDAR_TO_SWISS_SCHEMA_VERSION) {
+    return { ok: false, error: 'INVALID_MESSAGE_CONTRACT' };
+  }
+  if (!SAFE_ID.test(data.handoffId)) return { ok: false, error: 'INVALID_HANDOFF_ID' };
+  if (!SAFE_ID.test(data.calendarEventId)) return { ok: false, error: 'INVALID_CALENDAR_EVENT_ID' };
+  if (options.expectedHandoffId && data.handoffId !== options.expectedHandoffId) {
+    return { ok: false, error: 'HANDOFF_ID_MISMATCH' };
+  }
+  if (options.expectedCalendarEventId && data.calendarEventId !== options.expectedCalendarEventId) {
+    return { ok: false, error: 'CALENDAR_EVENT_MISMATCH' };
+  }
+  return { ok: true, value: data };
+}
+
+export function claimSwissHandoffMessage(event, { pendingSessions, allowedOrigins } = {}) {
+  const handoffId = event?.data?.handoffId;
+  const pending = pendingSessions?.get(handoffId);
+  if (!pending) return { ok: false, error: 'UNKNOWN_HANDOFF' };
+
+  const options = {
+    allowedOrigins,
+    expectedWindow: pending.popup,
+    expectedHandoffId: pending.handoffId,
+    expectedCalendarEventId: pending.calendarEventId,
+  };
+  const validator = event?.data?.type === SWISS_CANCELLED_MESSAGE_TYPE
+    ? validateSwissCancelledMessage
+    : validateSwissCreatedMessage;
+  const message = validator(event, options);
+  if (!message.ok) return message;
+  if (pending.processing) return { ok: false, error: 'HANDOFF_ALREADY_SETTLED' };
+
+  pending.processing = true;
+  pendingSessions.delete(handoffId);
+  return {
+    ok: true,
+    kind: message.value.type === SWISS_CANCELLED_MESSAGE_TYPE ? 'cancelled' : 'created',
+    value: message.value,
+    pending,
+  };
 }
 
 export function decideSwissIntegrationUpdate(currentTournamentId, incomingTournamentId) {

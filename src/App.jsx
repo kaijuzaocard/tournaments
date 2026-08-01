@@ -7,11 +7,11 @@ import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
 import {
   DEFAULT_SWISS_APP_URL,
   buildSwissHandoffUrl,
+  claimSwissHandoffMessage,
   decideSwissIntegrationUpdate,
   normalizeCalendarGameCode,
   normalizeTournamentIntegrationFields,
   parseAllowedOrigins,
-  validateSwissCreatedMessage,
 } from './utils/swissHandoff.js';
 
 // ==========================================
@@ -135,18 +135,19 @@ export default function App() {
 
   useEffect(() => {
     const receiveSwissMessage = async (event) => {
-      const handoffId = event?.data?.handoffId;
-      const pending = pendingSwissRef.current.get(handoffId);
-      if (!pending || !isAdminAuth) return;
-      const message = validateSwissCreatedMessage(event, {
+      if (!isAdminAuth) return;
+      const message = claimSwissHandoffMessage(event, {
+        pendingSessions: pendingSwissRef.current,
         allowedOrigins: allowedSwissOrigins,
-        expectedWindow: pending.popup,
-        expectedHandoffId: pending.handoffId,
-        expectedCalendarEventId: pending.calendarEventId,
       });
-      if (!message.ok || pending.processing) return;
-      pending.processing = true;
+      if (!message.ok) return;
+      const { pending } = message;
       clearPendingSwissPopup(pending.handoffId);
+
+      if (message.kind === 'cancelled') {
+        setSwissStatus(pending.calendarEventId, 'idle');
+        return;
+      }
 
       try {
         const tournamentRef = doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', pending.calendarEventId);

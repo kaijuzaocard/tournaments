@@ -5,12 +5,14 @@ import {
   buildCalendarToSwissPayload,
   buildOpenSwissPayload,
   buildSwissHandoffUrl,
+  claimSwissHandoffMessage,
   createHandoffId,
   decideSwissIntegrationUpdate,
   encodeHandoffPayload,
   normalizeCalendarGameCode,
   normalizeTournamentIntegrationFields,
   parseAllowedOrigins,
+  validateSwissCancelledMessage,
   validateSwissCreatedMessage,
 } from '../src/utils/swissHandoff.js';
 
@@ -113,6 +115,69 @@ test('accepts only the expected popup, origin, type, schema and event id', () =>
   assert.equal(validateSwissCreatedMessage({ ...good, data: { ...good.data, uid: 'unexpected' } }, { allowedOrigins, expectedWindow: popup }).ok, false);
 });
 
+test('accepts only an exact cancellation from the expected Swiss popup', () => {
+  const popup = {};
+  const allowedOrigins = parseAllowedOrigins('', 'https://swiss.example/');
+  const good = {
+    origin: 'https://swiss.example',
+    source: popup,
+    data: {
+      type: 'KJZC_SWISS_CANCELLED_V1',
+      schemaVersion: 1,
+      handoffId: HANDOFF_ID,
+      calendarEventId: 'calendar-event-1',
+    },
+  };
+  const options = {
+    allowedOrigins,
+    expectedWindow: popup,
+    expectedHandoffId: HANDOFF_ID,
+    expectedCalendarEventId: 'calendar-event-1',
+  };
+  assert.equal(validateSwissCancelledMessage(good, options).ok, true);
+  assert.equal(validateSwissCancelledMessage({ ...good, origin: 'https://evil.example' }, options).ok, false);
+  assert.equal(validateSwissCancelledMessage({ ...good, source: {} }, options).ok, false);
+  assert.equal(validateSwissCancelledMessage({ ...good, data: { ...good.data, handoffId: 'stale-handoff' } }, options).ok, false);
+  assert.equal(validateSwissCancelledMessage({ ...good, data: { ...good.data, calendarEventId: 'other-event' } }, options).ok, false);
+  assert.equal(validateSwissCancelledMessage({ ...good, data: { ...good.data, tournamentId: 'forbidden' } }, options).ok, false);
+});
+
+test('a handoff session settles once and parallel or stale messages cannot cross-match', () => {
+  const popupA = {};
+  const popupB = {};
+  const allowedOrigins = parseAllowedOrigins('', 'https://swiss.example/');
+  const pendingSessions = new Map([
+    ['handoff-a', { handoffId: 'handoff-a', calendarEventId: 'event-a', popup: popupA }],
+    ['handoff-b', { handoffId: 'handoff-b', calendarEventId: 'event-b', popup: popupB }],
+  ]);
+  const event = (source, data) => ({ origin: 'https://swiss.example', source, data });
+  const cancelledA = event(popupA, {
+    type: 'KJZC_SWISS_CANCELLED_V1', schemaVersion: 1, handoffId: 'handoff-a', calendarEventId: 'event-a',
+  });
+  const createdA = event(popupA, {
+    type: 'KJZC_SWISS_CREATED_V1', schemaVersion: 1, handoffId: 'handoff-a', calendarEventId: 'event-a', tournamentId: 't_a',
+  });
+
+  assert.equal(claimSwissHandoffMessage(cancelledA, { pendingSessions, allowedOrigins }).kind, 'cancelled');
+  assert.equal(claimSwissHandoffMessage(cancelledA, { pendingSessions, allowedOrigins }).error, 'UNKNOWN_HANDOFF');
+  assert.equal(claimSwissHandoffMessage(createdA, { pendingSessions, allowedOrigins }).error, 'UNKNOWN_HANDOFF');
+  assert.equal(pendingSessions.has('handoff-b'), true);
+
+  const forgedForB = event(popupA, {
+    type: 'KJZC_SWISS_CANCELLED_V1', schemaVersion: 1, handoffId: 'handoff-b', calendarEventId: 'event-b',
+  });
+  assert.equal(claimSwissHandoffMessage(forgedForB, { pendingSessions, allowedOrigins }).error, 'UNTRUSTED_WINDOW');
+
+  const createdB = event(popupB, {
+    type: 'KJZC_SWISS_CREATED_V1', schemaVersion: 1, handoffId: 'handoff-b', calendarEventId: 'event-b', tournamentId: 't_b',
+  });
+  const cancelledB = event(popupB, {
+    type: 'KJZC_SWISS_CANCELLED_V1', schemaVersion: 1, handoffId: 'handoff-b', calendarEventId: 'event-b',
+  });
+  assert.equal(claimSwissHandoffMessage(createdB, { pendingSessions, allowedOrigins }).kind, 'created');
+  assert.equal(claimSwissHandoffMessage(cancelledB, { pendingSessions, allowedOrigins }).error, 'UNKNOWN_HANDOFF');
+});
+
 test('parallel popup sessions cannot cross-match handoff IDs or window sources', () => {
   const allowedOrigins = parseAllowedOrigins('', 'https://swiss.example/');
   const popupA = {};
@@ -151,9 +216,10 @@ test('normalizes formal integration fields without parsing the legacy fee text',
 
 test('App wires success-only persistence, popup failure and manual unlink confirmation', () => {
   const source = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
-  assert.match(source, /validateSwissCreatedMessage/);
-  assert.match(source, /if \(!message\.ok \|\| pending\.processing\) return;/);
-  assert.match(source, /if \(!message\.ok[\s\S]*?await runTransaction/);
+  assert.match(source, /claimSwissHandoffMessage/);
+  assert.match(source, /if \(!message\.ok\) return;/);
+  assert.match(source, /if \(message\.kind === 'cancelled'\)[\s\S]*?setSwissStatus\(pending\.calendarEventId, 'idle'\);[\s\S]*?return;/);
+  assert.match(source, /if \(message\.kind === 'cancelled'\)[\s\S]*?return;[\s\S]*?await runTransaction/);
   assert.match(source, /swissTournamentId:\s*message\.value\.tournamentId/);
   assert.match(source, /if \(!popup\)/);
   assert.match(source, /confirm\('確定要清除這場活動的瑞士制關聯/);
