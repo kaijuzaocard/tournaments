@@ -1,9 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info } from 'lucide-react';
+import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
+import {
+  DEFAULT_SWISS_APP_URL,
+  buildSwissHandoffUrl,
+  decideSwissIntegrationUpdate,
+  normalizeCalendarGameCode,
+  normalizeTournamentIntegrationFields,
+  parseAllowedOrigins,
+  validateSwissCreatedMessage,
+} from './utils/swissHandoff.js';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -30,6 +39,8 @@ const db = getFirestore(app);
 const rawAppId = globalThis.__app_id ? String(globalThis.__app_id) : 'kaijuzaocard-main';
 const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
 const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
+const swissAppUrl = import.meta.env.VITE_SWISS_APP_URL || DEFAULT_SWISS_APP_URL;
+const allowedSwissOrigins = parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -83,7 +94,10 @@ export default function App() {
   const [tutorialIdx, setTutorialIdx] = useState(0);
   
   // 💡 特助修復：將預設的 'UA' 拿掉，改為空字串，讓系統稍後自動抓取分類庫的真實第一筆資料
-  const [formData, setFormData] = useState({ gameType: '', title: '', fee: '', description: '', images: [], prizeImages: [] });
+  const [formData, setFormData] = useState({
+    gameType: '', title: '', fee: '', entryFee: '', capacity: 0,
+    suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [],
+  });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
 
   const [expandedNotes, setExpandedNotes] = useState({});
@@ -95,14 +109,144 @@ export default function App() {
   const [isSendingLine, setIsSendingLine] = useState(false);
   
   const [toastMsg, setToastMsg] = useState('');
+  const [swissStatuses, setSwissStatuses] = useState({});
 
   const categoryScrollRef = useRef(null);
   const hasRandomizedBanner = useRef(false);
+  const pendingSwissRef = useRef(new Map());
+  const swissPopupTimersRef = useRef(new Map());
   const isAdminAuth = isFirebaseAdmin(user);
 
   const showToast = (msg) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 4000);
+  };
+
+  const setSwissStatus = (calendarEventId, status, error = '') => {
+    setSwissStatuses((current) => ({ ...current, [calendarEventId]: { status, error } }));
+  };
+
+  const clearPendingSwissPopup = (handoffId) => {
+    const timer = swissPopupTimersRef.current.get(handoffId);
+    if (timer) clearInterval(timer);
+    swissPopupTimersRef.current.delete(handoffId);
+    pendingSwissRef.current.delete(handoffId);
+  };
+
+  useEffect(() => {
+    const receiveSwissMessage = async (event) => {
+      const handoffId = event?.data?.handoffId;
+      const pending = pendingSwissRef.current.get(handoffId);
+      if (!pending || !isAdminAuth) return;
+      const message = validateSwissCreatedMessage(event, {
+        allowedOrigins: allowedSwissOrigins,
+        expectedWindow: pending.popup,
+        expectedHandoffId: pending.handoffId,
+        expectedCalendarEventId: pending.calendarEventId,
+      });
+      if (!message.ok || pending.processing) return;
+      pending.processing = true;
+      clearPendingSwissPopup(pending.handoffId);
+
+      try {
+        const tournamentRef = doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', pending.calendarEventId);
+        await runTransaction(db, async (transaction) => {
+          const snapshot = await transaction.get(tournamentRef);
+          if (!snapshot.exists()) throw new Error('CALENDAR_EVENT_NOT_FOUND');
+          const linkedTournamentId = snapshot.data()?.swissIntegration?.swissTournamentId || '';
+          const decision = decideSwissIntegrationUpdate(linkedTournamentId, message.value.tournamentId);
+          if (decision === 'conflict') throw new Error('SWISS_LINK_CONFLICT');
+          if (decision === 'unchanged') return;
+          transaction.update(tournamentRef, {
+            swissIntegration: {
+              schemaVersion: 1,
+              swissTournamentId: message.value.tournamentId,
+              linkedAt: serverTimestamp(),
+            },
+          });
+        });
+        setSwissStatus(pending.calendarEventId, 'linked');
+        setToastMsg('瑞士制賽事已建立並完成關聯。');
+        setTimeout(() => setToastMsg(''), 4000);
+      } catch (error) {
+        const code = error?.code || error?.message || 'SWISS_LINK_SAVE_FAILED';
+        console.error('瑞士制關聯保存失敗:', { code });
+        setSwissStatus(pending.calendarEventId, 'failed', `瑞士制賽事可能已建立，但關聯保存失敗（${code}）。請重新點擊，瑞士制會先尋找既有賽事。`);
+      }
+    };
+
+    window.addEventListener('message', receiveSwissMessage);
+    return () => window.removeEventListener('message', receiveSwissMessage);
+  }, [isAdminAuth]);
+
+  useEffect(() => () => {
+    swissPopupTimersRef.current.forEach((timer) => clearInterval(timer));
+    swissPopupTimersRef.current.clear();
+    pendingSwissRef.current.clear();
+  }, []);
+
+  const handleSwissTournament = (tournamentItem) => {
+    if (!isAdminAuth) {
+      showToast('此功能僅限已授權的 Google 管理員。');
+      return;
+    }
+    const linked = !!tournamentItem?.swissIntegration?.swissTournamentId;
+    const active = Array.from(pendingSwissRef.current.values())
+      .find((pending) => pending.calendarEventId === tournamentItem.id && !pending.popup?.closed);
+    if (active) {
+      active.popup.focus?.();
+      setSwissStatus(tournamentItem.id, active.action === 'open' ? 'linked' : 'preparing');
+      return;
+    }
+    setSwissStatus(tournamentItem.id, linked ? 'linked' : 'preparing');
+    try {
+      const { url, payload } = buildSwissHandoffUrl({
+        event: tournamentItem,
+        swissAppUrl,
+        sourceOrigin: window.location.origin,
+        action: linked ? 'open' : 'create',
+      });
+      const popup = window.open(url, `KJZC_SWISS_HANDOFF_${payload.handoffId}`);
+      if (!popup) {
+        setSwissStatus(tournamentItem.id, 'failed', '瀏覽器已阻擋新視窗，請允許彈出式視窗後重試。');
+        return;
+      }
+      popup.focus?.();
+      const pending = {
+        handoffId: payload.handoffId,
+        calendarEventId: tournamentItem.id,
+        popup,
+        action: linked ? 'open' : 'create',
+      };
+      pendingSwissRef.current.set(payload.handoffId, pending);
+      const timer = setInterval(() => {
+        if (!popup.closed) return;
+        const current = pendingSwissRef.current.get(payload.handoffId);
+        if (current?.calendarEventId === tournamentItem.id && current.action === 'create') {
+          setSwissStatus(tournamentItem.id, 'failed', '瑞士制視窗已關閉，尚未收到建立成功訊息。');
+        }
+        clearPendingSwissPopup(payload.handoffId);
+      }, 500);
+      swissPopupTimersRef.current.set(payload.handoffId, timer);
+    } catch (error) {
+      const code = error?.message || 'SWISS_HANDOFF_FAILED';
+      setSwissStatus(tournamentItem.id, 'failed', `無法準備瑞士制資料（${code}）。`);
+    }
+  };
+
+  const clearSwissIntegration = async (tournamentItem) => {
+    if (!isAdminAuth || !tournamentItem?.swissIntegration?.swissTournamentId) return;
+    if (!confirm('確定要清除這場活動的瑞士制關聯？這不會刪除瑞士制賽事。')) return;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', tournamentItem.id), {
+        swissIntegration: { schemaVersion: 1, swissTournamentId: null, linkedAt: null },
+      });
+      setSwissStatus(tournamentItem.id, 'idle');
+      showToast('已清除失效關聯；原瑞士制資料不受影響。');
+    } catch (error) {
+      const code = error?.code || error?.message || 'SWISS_UNLINK_FAILED';
+      setSwissStatus(tournamentItem.id, 'failed', `清除關聯失敗（${code}）。`);
+    }
   };
 
   const sendLineNotification = async (data, isTest = false) => {
@@ -399,21 +543,31 @@ export default function App() {
     const validSchedules = schedules.filter(s => s.date && s.time);
     if (validSchedules.length === 0) return;
     try {
+      const normalizedForm = normalizeTournamentIntegrationFields(formData);
+      if (normalizedForm.entryFee == null) {
+        showToast('請填寫正式數值報名費；文字方案仍可保留在原欄位。');
+        return;
+      }
       const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
-      const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...formData, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
+      const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...normalizedForm, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
       await Promise.all(promises);
-      setFormData({ ...formData, title: '', description: '', images: [], prizeImages: [] });
+      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [] });
       setSchedules([{ date: '', time: '19:00' }]);
       showToast('✅ 賽事已成功發布！');
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      console.error('新增賽事失敗:', { code: err?.code || err?.message });
+      showToast(`新增賽事失敗（${err?.code || err?.message || 'UNKNOWN'}）。`);
+    }
   };
 
   const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!user || !editingId || !editFormData) return;
     try {
+      const normalizedEdit = normalizeTournamentIntegrationFields(editFormData);
+      if (normalizedEdit.entryFee == null) delete normalizedEdit.entryFee;
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', editingId), {
-        ...editFormData,
+        ...normalizedEdit,
         updatedAt: new Date().toISOString()
       });
       setEditingId(null);
@@ -1165,8 +1319,9 @@ export default function App() {
                     <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-gray-200">
                       <h2 className="text-xl md:text-2xl font-black text-gray-800 mb-6 flex items-center gap-2"><Plus className="w-6 h-6 md:w-8 md:h-8 text-orange-500" /> 發布新賽事情報</h2>
                       <form onSubmit={handleAddTournament} className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                          <div><label className="text-sm font-bold text-gray-600 block mb-2">遊戲種類</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.gameType} onChange={e => setFormData({...formData, gameType: e.target.value})}>{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">遊戲種類</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.gameType} onChange={e => setFormData({...formData, gameType: e.target.value, gameCode: normalizeCalendarGameCode('', e.target.value)})}>{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">串接遊戲代碼</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={normalizeCalendarGameCode(formData.gameCode, formData.gameType)} onChange={e => setFormData({...formData, gameCode: e.target.value})}><option value="ptcg">Pokémon TCG</option><option value="ucg">Ultraman Card Game</option><option value="godzilla">Godzilla Card Game</option><option value="nivel">Nivel Arena</option><option value="other">其他／自訂</option></select></div>
                           <div><label className="text-sm font-bold text-gray-600 block mb-2">賽事名稱</label><input required type="text" placeholder="例如：奪包賽" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} /></div>
                         </div>
                         
@@ -1181,7 +1336,16 @@ export default function App() {
                           ))}</div>
                         </div>
 
-                        <div><label className="text-sm font-bold text-gray-600 block mb-2">報名費或方案</label><input required type="text" placeholder="例如: 200元 或 買2包" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.fee} onChange={e => setFormData({...formData, fee: e.target.value})} /></div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">報名費或方案（公告文字）</label><input required type="text" placeholder="例如: 200元 或 買2包" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.fee} onChange={e => setFormData({...formData, fee: e.target.value})} /></div>
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">正式報名費 entryFee</label><input required type="number" min="0" step="1" placeholder="例如: 200" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.entryFee} onChange={e => setFormData({...formData, entryFee: e.target.value})} /><p className="text-xs text-gray-400 mt-1">只接受非負整數，不會從公告文字自動猜測。</p></div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">人數上限</label><input type="number" min="0" step="1" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold" value={formData.capacity} onChange={e => setFormData({...formData, capacity: e.target.value})} /></div>
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">建議瑞士輪數</label><input type="number" min="0" max="50" step="1" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold" value={formData.suggestedRounds} onChange={e => setFormData({...formData, suggestedRounds: e.target.value})} /></div>
+                          <div><label className="text-sm font-bold text-gray-600 block mb-2">建議 Top Cut</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold" value={formData.suggestedTopCut} onChange={e => setFormData({...formData, suggestedTopCut: Number(e.target.value)})}><option value={0}>不預設</option><option value={2}>Top 2</option><option value={4}>Top 4</option><option value={8}>Top 8</option><option value={16}>Top 16</option></select></div>
+                        </div>
                         
                         <div>
                           <label className="text-sm font-bold text-gray-600 block mb-2">備註與賽制說明</label>
@@ -1417,9 +1581,10 @@ export default function App() {
                             editingId === t.id ? (
                               <form key={`edit-${t.id}`} onSubmit={handleSaveEdit} className="p-6 bg-orange-50 shadow-inner rounded-2xl border-2 border-orange-300 flex flex-col gap-4">
                                 <div className="flex justify-between items-center border-b border-orange-200 pb-3"><span className="font-black text-orange-800 flex items-center gap-2 text-lg"><Edit className="w-5 h-5"/> 編輯賽事內容</span><button type="button" onClick={() => { setEditingId(null); setEditFormData(null); }} className="text-gray-400 hover:text-red-500 bg-white rounded-full p-1.5 shadow-sm transition-colors"><X className="w-5 h-5"/></button></div>
-                                <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">遊戲</label><select value={editFormData.gameType} onChange={(e) => setEditFormData({...editFormData, gameType: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">名稱</label><input required type="text" value={editFormData.title} onChange={(e) => setEditFormData({...editFormData, title: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">遊戲</label><select value={editFormData.gameType} onChange={(e) => setEditFormData({...editFormData, gameType: e.target.value, gameCode: normalizeCalendarGameCode('', e.target.value)})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none">{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">串接代碼</label><select value={normalizeCalendarGameCode(editFormData.gameCode, editFormData.gameType)} onChange={(e) => setEditFormData({...editFormData, gameCode: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white"><option value="ptcg">Pokémon TCG</option><option value="ucg">Ultraman Card Game</option><option value="godzilla">Godzilla Card Game</option><option value="nivel">Nivel Arena</option><option value="other">其他／自訂</option></select></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">名稱</label><input required type="text" value={editFormData.title} onChange={(e) => setEditFormData({...editFormData, title: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
                                 <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">日期</label><input required type="date" value={editFormData.date} onChange={(e) => setEditFormData({...editFormData, date: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">時間</label><input required type="time" value={editFormData.time} onChange={(e) => setEditFormData({...editFormData, time: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
-                                <div><label className="text-xs font-bold text-orange-800 block mb-1.5">費用</label><input required type="text" value={editFormData.fee} onChange={(e) => setEditFormData({...editFormData, fee: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">費用公告文字</label><input required type="text" value={editFormData.fee} onChange={(e) => setEditFormData({...editFormData, fee: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">正式報名費 entryFee</label><input type="number" min="0" step="1" value={editFormData.entryFee ?? ''} onChange={(e) => setEditFormData({...editFormData, entryFee: e.target.value})} placeholder="舊活動可留空，建立瑞士制時補填" className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">人數上限</label><input type="number" min="0" step="1" value={editFormData.capacity ?? 0} onChange={(e) => setEditFormData({...editFormData, capacity: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議瑞士輪數</label><input type="number" min="0" max="50" step="1" value={editFormData.suggestedRounds ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedRounds: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議 Top Cut</label><select value={editFormData.suggestedTopCut ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedTopCut: Number(e.target.value)})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white"><option value={0}>不預設</option><option value={2}>Top 2</option><option value={4}>Top 4</option><option value={8}>Top 8</option><option value={16}>Top 16</option></select></div></div>
                                 
                                 <div>
                                   <div className="flex justify-between items-end mb-2">
@@ -1479,12 +1644,43 @@ export default function App() {
                                   <div className="font-black text-gray-800 text-lg mb-2">{t.title}</div>
                                   <div className="text-sm text-gray-500 font-bold mb-4 flex items-center gap-1"><Clock className="w-4 h-4"/> {t.time} 開打</div>
                                 </div>
+                                {isAdminAuth && (
+                                  <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                                    <button
+                                      type="button"
+                                      disabled={swissStatuses[t.id]?.status === 'preparing'}
+                                      onClick={() => handleSwissTournament(t)}
+                                      className="w-full px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-60"
+                                    >
+                                      {t.swissIntegration?.swissTournamentId ? <ExternalLink className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
+                                      {t.swissIntegration?.swissTournamentId
+                                        ? '開啟瑞士制賽事'
+                                        : swissStatuses[t.id]?.status === 'preparing'
+                                          ? '準備瑞士制資料……'
+                                          : swissStatuses[t.id]?.status === 'failed'
+                                            ? '建立失敗／重新嘗試'
+                                            : '建立瑞士制賽事'}
+                                    </button>
+                                    {t.swissIntegration?.swissTournamentId && (
+                                      <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                                        <span className="text-indigo-700 font-bold">已連結：{t.swissIntegration.swissTournamentId}</span>
+                                        <button type="button" onClick={() => clearSwissIntegration(t)} className="text-rose-600 font-bold hover:underline">清除失效連結</button>
+                                      </div>
+                                    )}
+                                    {swissStatuses[t.id]?.error && <p role="alert" className="mt-2 text-xs font-bold text-rose-700">{swissStatuses[t.id].error}</p>}
+                                  </div>
+                                )}
                                 <div className="flex gap-2 justify-end border-t border-gray-100 pt-4 mt-auto">
                                   <button type="button" onClick={(e) => toggleNote(e, t.id)} className="flex-1 py-2 text-orange-600 bg-orange-50 rounded-xl hover:bg-orange-100 active:scale-95 transition-all shadow-sm font-bold text-sm" title="查看詳細資訊">詳情</button>
                                   <button type="button" onClick={() => { 
                                     setEditingId(t.id); 
                                     setEditFormData({
                                       ...t, 
+                                      gameCode: normalizeCalendarGameCode(t.gameCode, t.gameType),
+                                      entryFee: Number.isSafeInteger(t.entryFee) && t.entryFee >= 0 ? t.entryFee : '',
+                                      capacity: Number.isSafeInteger(t.capacity) && t.capacity >= 0 ? t.capacity : 0,
+                                      suggestedRounds: Number.isSafeInteger(t.suggestedRounds) && t.suggestedRounds >= 0 ? t.suggestedRounds : 0,
+                                      suggestedTopCut: [0, 2, 4, 8, 16].includes(t.suggestedTopCut) ? t.suggestedTopCut : 0,
                                       images: Array.isArray(t.images) && t.images.length > 0 ? t.images : (t.image ? [t.image] : []),
                                       prizeImages: Array.isArray(t.prizeImages) ? t.prizeImages : []
                                     }); 
