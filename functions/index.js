@@ -22,6 +22,12 @@ function functionService() {
   });
 }
 
+function callableClientIp(request) {
+  const address = request.rawRequest?.ip || request.rawRequest?.socket?.remoteAddress;
+  if (address) return address;
+  return process.env.FUNCTIONS_EMULATOR === 'true' ? '127.0.0.1' : undefined;
+}
+
 function callableError(error) {
   const code = error instanceof ServiceError ? error.code : 'INTERNAL_ERROR';
   const expected = new Set([
@@ -47,13 +53,22 @@ function callableError(error) {
     : publicCode === 'INTERNAL_ERROR' ? 'internal'
       : publicCode === 'REGISTRATION_NOT_FOUND' ? 'not-found'
         : 'failed-precondition';
-  if (publicCode === 'INTERNAL_ERROR') console.error('Calendar pre-registration callable failed', { code });
+  if (publicCode === 'INTERNAL_ERROR') {
+    const safeCode = typeof error?.code === 'string' && /^[A-Z0-9_.:-]{1,80}$/i.test(error.code)
+      ? error.code
+      : null;
+    const safeMessage = typeof error?.message === 'string' && /^[A-Z0-9_.:-]{1,80}$/.test(error.message)
+      ? error.message
+      : null;
+    const diagnosticCode = safeCode || safeMessage || error?.name || 'UnknownError';
+    console.error('Calendar pre-registration callable failed', { code, diagnosticCode });
+  }
   return new HttpsError(status, publicCode);
 }
 
 export const submitTournamentPreRegistration = onCall(callableOptions, async (request) => {
   try {
-    const result = await functionService().submit(request.data, request.rawRequest.ip);
+    const result = await functionService().submit(request.data, callableClientIp(request));
     return {
       schemaVersion: 1,
       registrationId: result.registrationId,
@@ -67,7 +82,7 @@ export const submitTournamentPreRegistration = onCall(callableOptions, async (re
 
 export const manageTournamentPreRegistration = onCall(callableOptions, async (request) => {
   try {
-    return await functionService().manage(request.data, request.rawRequest.ip);
+    return await functionService().manage(request.data, callableClientIp(request));
   } catch (error) {
     throw callableError(error);
   }
