@@ -75,3 +75,35 @@ npx --yes firebase-tools deploy --project kaijuzaocard-tournaments --only firest
 ## 7. B2B 延伸界線
 
 B2B 另建版本化、短效、一次性 server-side handoff。只傳 active entry 的五個 allowlisted 欄位，不傳 token/hash/IP/operation，不修改 B1 handoff schema，不把玩家名單放 URL。
+
+## 8. Dependency reachability gate (2026-08-03)
+
+Deployment source: `b141fd6b43011483c21b5740ad6e9b7f653ea2cc`.
+
+### Root production audit
+
+`npm audit --omit=dev --json` reports two transitive production findings:
+
+- High: `@grpc/grpc-js@1.9.15`, through `firebase@12.11.0 -> @firebase/firestore@4.13.0`. Advisories `GHSA-5375-pq7m-f5r2` and `GHSA-99f4-grh7-6pcq`; patched in the 1.9 line at `1.9.16`.
+- Critical: `websocket-driver@0.7.4`, through `firebase@12.11.0 -> @firebase/database@1.1.2 -> faye-websocket@0.11.4`. Advisories `GHSA-mp7j-qc5w-4988` and `GHSA-xv26-6w52-cph6`; patched at `0.7.5`.
+
+These installed packages are not reachable from the B2A browser runtime:
+
+- Source imports only `firebase/app`, `firebase/auth`, `firebase/firestore`, and `firebase/functions`; it does not import `firebase/database`.
+- Firebase and Firestore conditional exports select the browser ESM entries (`firebase/*/dist/esm` and `@firebase/firestore/dist/index.esm.js`). The vulnerable gRPC package belongs to Firestore's Node export.
+- A programmatic Vite production build captured 1,747 transformed modules. It contained zero modules from `@grpc/grpc-js`, `@firebase/database`, `faye-websocket`, or `websocket-driver`.
+- The public activity page, anonymous callable submission, management-link view, and admin dialog all execute through that same browser bundle. Anonymous callables use the browser `firebase/functions` client; the callable server runtime comes from the separate `functions/package-lock.json`.
+
+Decision: the root high/critical findings are accepted temporarily for B2A because neither affected implementation is present in the production browser module graph. This is not a general acceptance for Node use of the root Firebase package.
+
+### Functions audit
+
+The Functions package reports seven moderate transitive findings and no high or critical findings. The underlying advisory is `GHSA-w5hq-g745-h8pq` for `uuid` v3/v5/v6 with a caller-provided output buffer; patched at `11.1.1` (and corresponding later release lines).
+
+The production Functions entry imports only `firebase-admin/app`, `firebase-admin/firestore`, Node `crypto`, and `firebase-functions` callable/params APIs. A runtime module-load trace confirms that it loads `@google-cloud/firestore` and patched `@grpc/grpc-js@1.14.4`, but does not load `@google-cloud/storage`, `uuid@9.0.1`, the vulnerable `gaxios@6.7.1`, `retry-request@7.0.2`, or `teeny-request@9.0.0`. B2A does not call UUID v3/v5/v6 or provide an output buffer.
+
+Decision: the Functions moderate findings are not reachable from either exported callable and are accepted temporarily for this release.
+
+### Follow-up remediation
+
+Do not run an unreviewed `npm audit fix` in this release. Create a separate dependency-only change that refreshes the transitive lock entries to at least `@grpc/grpc-js@1.9.16` and `websocket-driver@0.7.5`, then rerun the complete frontend, Rules emulator, Functions emulator, build, lint, and module-graph checks. Track Firebase Admin's Storage dependency until it carries a patched uuid line even though B2A does not load that optional service.
