@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
 import {
@@ -19,6 +20,18 @@ import {
   clearSwissIntegrationSafely,
   removeSwissIntegrationKey,
 } from './utils/swissIntegration.js';
+import {
+  formatTaipeiDateTimeLocal,
+  normalizePreRegistrationSettings,
+  preparePreRegistrationForWrite,
+} from './utils/preRegistration.js';
+import { getManagementRoute } from './utils/managementTokenBootstrap.js';
+import {
+  PreRegistrationAdminDialog,
+  PreRegistrationDialog,
+  PreRegistrationPanel,
+  RegistrationManagementDialog,
+} from './components/PreRegistrationDialog.jsx';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -40,6 +53,7 @@ const firebaseConfig = injectedFirebaseConfig ? JSON.parse(injectedFirebaseConfi
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const functions = getFunctions(app, 'asia-east1');
 
 // 🔒 特助終極修復：精準抓取環境變數，過濾掉 _src 等後綴，完美對齊 Firebase 的安全權限要求！
 const rawAppId = globalThis.__app_id ? String(globalThis.__app_id) : 'kaijuzaocard-main';
@@ -56,6 +70,7 @@ const classifyTournamentSwissIntegration = (tournamentItem) => classifySwissInte
 export default function App() {
   const [user, setUser] = useState(null);
   const [tournaments, setTournaments] = useState([]);
+  const [preRegistrationStats, setPreRegistrationStats] = useState({});
   const [currentView, setCurrentView] = useState('player'); 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -108,6 +123,7 @@ export default function App() {
   const [formData, setFormData] = useState({
     gameType: '', title: '', fee: '', entryFee: '', capacity: 0,
     suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [],
+    preRegistration: { schemaVersion: 1, enabled: false, capacity: 0, deadline: null },
   });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
 
@@ -121,6 +137,9 @@ export default function App() {
   
   const [toastMsg, setToastMsg] = useState('');
   const [swissStatuses, setSwissStatuses] = useState({});
+  const [registrationEvent, setRegistrationEvent] = useState(null);
+  const [adminRegistrationEvent, setAdminRegistrationEvent] = useState(null);
+  const [showManagementDialog, setShowManagementDialog] = useState(() => Boolean(getManagementRoute()));
 
   const categoryScrollRef = useRef(null);
   const hasRandomizedBanner = useRef(false);
@@ -382,7 +401,7 @@ export default function App() {
     
     const unsubs = [];
     let loadedCount = 0;
-    const totalCollections = 5;
+    const totalCollections = 6;
 
     const checkAllLoaded = () => {
       loadedCount++;
@@ -436,6 +455,9 @@ export default function App() {
 
     setupListener(getCollection('store_closures'), setClosures); 
     setupListener(getCollection('special_openings'), setSpecialOpenings);
+    setupListener(getCollection('tournamentPreRegistrationStats'), (data) => {
+      setPreRegistrationStats(Object.fromEntries(data.map((item) => [item.id, item.activeCount])));
+    });
 
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
@@ -444,6 +466,7 @@ export default function App() {
     if (!isAdminAuth) {
       setNotePresets([]);
       setReservations([]);
+      setAdminRegistrationEvent(null);
       return undefined;
     }
 
@@ -603,6 +626,13 @@ export default function App() {
     if (validSchedules.length === 0) return;
     try {
       const normalizedForm = normalizeTournamentIntegrationFields(formData);
+      const preRegistration = preparePreRegistrationForWrite(
+        formData,
+        normalizedForm.capacity,
+        (millis) => Timestamp.fromMillis(millis),
+      );
+      if (preRegistration) normalizedForm.preRegistration = preRegistration;
+      else delete normalizedForm.preRegistration;
       if (normalizedForm.entryFee == null) {
         showToast('請填寫正式數值報名費；文字方案仍可保留在原欄位。');
         return;
@@ -610,7 +640,7 @@ export default function App() {
       const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
       const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...normalizedForm, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
       await Promise.all(promises);
-      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [] });
+      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [], preRegistration: { schemaVersion: 1, enabled: false, capacity: 0, deadline: null } });
       setSchedules([{ date: '', time: '19:00' }]);
       showToast('✅ 賽事已成功發布！');
     } catch (err) {
@@ -624,6 +654,13 @@ export default function App() {
     if (!user || !editingId || !editFormData) return;
     try {
       const normalizedEdit = normalizeTournamentIntegrationFields(editFormData);
+      const preRegistration = preparePreRegistrationForWrite(
+        editFormData,
+        normalizedEdit.capacity,
+        (millis) => Timestamp.fromMillis(millis),
+      );
+      if (preRegistration) normalizedEdit.preRegistration = preRegistration;
+      else delete normalizedEdit.preRegistration;
       if (normalizedEdit.entryFee == null) delete normalizedEdit.entryFee;
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', editingId), {
         ...normalizedEdit,
@@ -1048,7 +1085,7 @@ export default function App() {
                           <div className="p-4 md:p-6 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
                             <div className="flex flex-col gap-3 md:gap-4">
                               {dayData.events.map(t => {
-                                const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()));
+                                const hasDetails = ((Array.isArray(t.images) && t.images.length > 0) || (Array.isArray(t.prizeImages) && t.prizeImages.length > 0) || t.image || (t.description && typeof t.description === 'string' && t.description.trim()) || t.preRegistration?.enabled === true);
                                 const isExpanded = expandedNotes[t.id];
 
                                 return (
@@ -1109,6 +1146,7 @@ export default function App() {
                                               </div>
                                             </div>
                                           )}
+                                          <PreRegistrationPanel event={t} activeCount={preRegistrationStats[t.id] ?? 0} onRegister={setRegistrationEvent} />
                                         </div>
                                       </div>
                                     )}
@@ -1212,6 +1250,8 @@ export default function App() {
                                 </button>
                               )}
                             </div>
+
+                            <PreRegistrationPanel event={t} activeCount={preRegistrationStats[t.id] ?? 0} onRegister={setRegistrationEvent} />
 
                             {expandedNotes[t.id] && (
                               <div className="mt-4 pt-4 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
@@ -1382,6 +1422,35 @@ export default function App() {
                           <div><label className="text-sm font-bold text-gray-600 block mb-2">遊戲種類</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.gameType} onChange={e => setFormData({...formData, gameType: e.target.value, gameCode: normalizeCalendarGameCode('', e.target.value)})}>{categories.map(cat => <option key={cat.id} value={cat.gameType}>{cat.label}</option>)}</select></div>
                           <div><label className="text-sm font-bold text-gray-600 block mb-2">串接遊戲代碼</label><select className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={normalizeCalendarGameCode(formData.gameCode, formData.gameType)} onChange={e => setFormData({...formData, gameCode: e.target.value})}><option value="ptcg">Pokémon TCG</option><option value="ucg">Ultraman Card Game</option><option value="godzilla">Godzilla Card Game</option><option value="nivel">Nivel Arena</option><option value="other">其他／自訂</option></select></div>
                           <div><label className="text-sm font-bold text-gray-600 block mb-2">賽事名稱</label><input required type="text" placeholder="例如：奪包賽" className="w-full p-3.5 border border-gray-300 rounded-xl bg-gray-50 text-sm font-bold focus:ring-2 focus:ring-orange-500 outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} /></div>
+                        </div>
+
+                        <div className="border border-emerald-200 bg-emerald-50 p-5 rounded-xl space-y-4">
+                          <label className="flex items-center justify-between gap-4 font-black text-emerald-900">
+                            <span>開放賽事預報名</span>
+                            <input
+                              type="checkbox"
+                              checked={formData.preRegistration?.enabled === true}
+                              onChange={(e) => {
+                                const fallback = Number(formData.capacity);
+                                setFormData({
+                                  ...formData,
+                                  preRegistration: {
+                                    schemaVersion: 1,
+                                    enabled: e.target.checked,
+                                    capacity: formData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''),
+                                    deadline: formData.preRegistration?.deadline ?? null,
+                                  },
+                                });
+                              }}
+                              className="w-5 h-5 accent-emerald-600"
+                            />
+                          </label>
+                          {formData.preRegistration?.enabled && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <label className="text-sm font-bold text-gray-700">預報名人數上限<input required type="number" min="1" max="256" step="1" value={formData.preRegistration.capacity} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label>
+                              <label className="text-sm font-bold text-gray-700">預報名截止時間（選填）<input type="datetime-local" value={formData.preRegistration.deadline || ''} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /><span className="block mt-1 text-xs text-gray-500">Asia/Taipei</span></label>
+                            </div>
+                          )}
                         </div>
                         
                         <div className="bg-orange-50 p-5 rounded-2xl border border-orange-100 shadow-inner">
@@ -1644,6 +1713,11 @@ export default function App() {
                                 <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">日期</label><input required type="date" value={editFormData.date} onChange={(e) => setEditFormData({...editFormData, date: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">時間</label><input required type="time" value={editFormData.time} onChange={(e) => setEditFormData({...editFormData, time: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">費用公告文字</label><input required type="text" value={editFormData.fee} onChange={(e) => setEditFormData({...editFormData, fee: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">正式報名費 entryFee</label><input type="number" min="0" step="1" value={editFormData.entryFee ?? ''} onChange={(e) => setEditFormData({...editFormData, entryFee: e.target.value})} placeholder="舊活動可留空，建立瑞士制時補填" className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white focus:ring-2 focus:ring-orange-500 outline-none" /></div></div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">人數上限</label><input type="number" min="0" step="1" value={editFormData.capacity ?? 0} onChange={(e) => setEditFormData({...editFormData, capacity: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議瑞士輪數</label><input type="number" min="0" max="50" step="1" value={editFormData.suggestedRounds ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedRounds: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議 Top Cut</label><select value={editFormData.suggestedTopCut ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedTopCut: Number(e.target.value)})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white"><option value={0}>不預設</option><option value={2}>Top 2</option><option value={4}>Top 4</option><option value={8}>Top 8</option><option value={16}>Top 16</option></select></div></div>
+
+                                <div className="border border-emerald-200 bg-emerald-50 p-4 rounded-xl space-y-3">
+                                  <label className="flex items-center justify-between gap-4 text-sm font-black text-emerald-900"><span>開放賽事預報名</span><input type="checkbox" checked={editFormData.preRegistration?.enabled === true} onChange={(e) => { const fallback = Number(editFormData.capacity); setEditFormData({ ...editFormData, preRegistration: { schemaVersion: 1, enabled: e.target.checked, capacity: editFormData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''), deadline: editFormData.preRegistration?.deadline ?? null } }); }} className="w-5 h-5 accent-emerald-600" /></label>
+                                  {(editFormData.preRegistration?.enabled || editFormData.preRegistration?.capacity) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs font-bold text-gray-700">預報名人數上限<input required={editFormData.preRegistration?.enabled} type="number" min="1" max="256" step="1" value={editFormData.preRegistration?.capacity || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label><label className="text-xs font-bold text-gray-700">截止時間（Asia/Taipei）<input type="datetime-local" value={editFormData.preRegistration?.deadline || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label></div>}
+                                </div>
                                 
                                 <div>
                                   <div className="flex justify-between items-end mb-2">
@@ -1740,6 +1814,12 @@ export default function App() {
                                     {swissStatuses[t.id]?.error && <p role="alert" className="mt-2 text-xs font-bold text-rose-700">{swissStatuses[t.id].error}</p>}
                                   </div>
                                 )}
+                                {isAdminAuth && (t.preRegistration || (preRegistrationStats[t.id] ?? 0) > 0) && (
+                                  <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between gap-3">
+                                    <span className="text-sm font-black text-emerald-800">預報名 {preRegistrationStats[t.id] ?? 0} / {t.preRegistration?.capacity ?? '未設定'}</span>
+                                    <button type="button" onClick={() => setAdminRegistrationEvent(t)} className="px-3 py-2 bg-emerald-700 text-white text-sm font-black rounded-lg hover:bg-emerald-800">查看預報名名單</button>
+                                  </div>
+                                )}
                                 <div className="flex gap-2 justify-end border-t border-gray-100 pt-4 mt-auto">
                                   <button type="button" onClick={(e) => toggleNote(e, t.id)} className="flex-1 py-2 text-orange-600 bg-orange-50 rounded-xl hover:bg-orange-100 active:scale-95 transition-all shadow-sm font-bold text-sm" title="查看詳細資訊">詳情</button>
                                   <button type="button" onClick={() => { 
@@ -1751,6 +1831,14 @@ export default function App() {
                                       capacity: Number.isSafeInteger(t.capacity) && t.capacity >= 0 ? t.capacity : 0,
                                       suggestedRounds: Number.isSafeInteger(t.suggestedRounds) && t.suggestedRounds >= 0 ? t.suggestedRounds : 0,
                                       suggestedTopCut: [0, 2, 4, 8, 16].includes(t.suggestedTopCut) ? t.suggestedTopCut : 0,
+                                      preRegistration: (() => {
+                                        const normalized = normalizePreRegistrationSettings(t.preRegistration, t.capacity);
+                                        return {
+                                          ...normalized,
+                                          capacity: normalized.capacity || '',
+                                          deadline: formatTaipeiDateTimeLocal(normalized.deadline),
+                                        };
+                                      })(),
                                       images: Array.isArray(t.images) && t.images.length > 0 ? t.images : (t.image ? [t.image] : []),
                                       prizeImages: Array.isArray(t.prizeImages) ? t.prizeImages : []
                                     }); 
@@ -1816,6 +1904,21 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {registrationEvent && (
+        <PreRegistrationDialog event={registrationEvent} functions={functions} onClose={() => setRegistrationEvent(null)} />
+      )}
+      {showManagementDialog && (
+        <RegistrationManagementDialog functions={functions} onClose={() => setShowManagementDialog(false)} />
+      )}
+      <PreRegistrationAdminDialog
+        open={Boolean(adminRegistrationEvent)}
+        event={adminRegistrationEvent}
+        isAdmin={isAdminAuth}
+        db={db}
+        appId={appId}
+        onClose={() => setAdminRegistrationEvent(null)}
+      />
 
       {/* 🔍 全域放大圖片懸浮視窗 */}
       {fullscreenImage && (

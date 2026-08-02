@@ -67,6 +67,29 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    match /artifacts/{appId}/public/data/tournamentPreRegistrationStats/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrations/{calendarEventId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+
+      match /entries/{registrationId} {
+        allow read: if isAdmin();
+        allow create, update, delete: if false;
+      }
+
+      match /{internalCollection}/{documentId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrationRateLimits/{documentId} {
+      allow read, write: if false;
+    }
+
     match /artifacts/{appId}/public/data/game_categories/{documentId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();

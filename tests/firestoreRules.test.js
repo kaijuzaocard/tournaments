@@ -57,6 +57,13 @@ function adminDb() {
   }).firestore();
 }
 
+function regularGoogleDb(uid = 'regular-google-user') {
+  return testEnv.authenticatedContext(uid, {
+    email: 'member@example.test',
+    firebase: { sign_in_provider: 'google.com' }
+  }).firestore();
+}
+
 function legalReservation(overrides = {}) {
   return {
     gameType: 'ptcg',
@@ -129,6 +136,51 @@ describe('public tournament collections', () => {
       doc(db, `${DATA_ROOT}/monster_tournaments/anonymous-admin-attempt`),
       { title: 'Denied' }
     ));
+  });
+});
+
+describe('tournament pre-registration privacy', () => {
+  const eventPath = `${DATA_ROOT}/monster_tournaments/event-prereg`;
+  const statsPath = `${DATA_ROOT}/tournamentPreRegistrationStats/event-prereg`;
+  const entryPath = `artifacts/${APP_ID}/private/data/tournamentPreRegistrations/event-prereg/entries/reg-1`;
+  const entriesPath = `artifacts/${APP_ID}/private/data/tournamentPreRegistrations/event-prereg/entries`;
+
+  test('public visitors can read event settings and aggregate counts', async () => {
+    await seed(eventPath, { title: 'Open', preRegistration: { schemaVersion: 1, enabled: true, capacity: 8, deadline: null } });
+    await seed(statsPath, { schemaVersion: 1, activeCount: 1 });
+    await assertSucceeds(getDoc(doc(unauthenticatedDb(), eventPath)));
+    await assertSucceeds(getDoc(doc(unauthenticatedDb(), statsPath)));
+  });
+
+  test('unauthenticated, anonymous, and regular Google users cannot read private entries', async () => {
+    await seed(entryPath, { registrationId: 'reg-1', playerName: 'Private' });
+    await assertFails(getDoc(doc(unauthenticatedDb(), entryPath)));
+    await assertFails(getDocs(collection(anonymousDb(), entriesPath)));
+    await assertFails(getDocs(collection(regularGoogleDb(), entriesPath)));
+  });
+
+  test('clients cannot directly create, update, or delete entries', async () => {
+    await seed(entryPath, { registrationId: 'reg-1', playerName: 'Private' });
+    for (const db of [unauthenticatedDb(), anonymousDb(), regularGoogleDb(), adminDb()]) {
+      await assertFails(setDoc(doc(db, `${entriesPath}/reg-2`), { playerName: 'Injected' }));
+      await assertFails(updateDoc(doc(db, entryPath), { playerName: 'Changed' }));
+      await assertFails(deleteDoc(doc(db, entryPath)));
+    }
+  });
+
+  test('allowlisted Google administrators can read and list entries', async () => {
+    await seed(entryPath, { registrationId: 'reg-1', playerName: 'Private' });
+    await assertSucceeds(getDoc(doc(adminDb(), entryPath)));
+    await assertSucceeds(getDocs(collection(adminDb(), entriesPath)));
+  });
+
+  test('internal indexes, operations, and rate limits remain unreadable to clients', async () => {
+    const identity = `artifacts/${APP_ID}/private/data/tournamentPreRegistrations/event-prereg/identities/hash`;
+    const rate = `artifacts/${APP_ID}/private/data/tournamentPreRegistrationRateLimits/bucket`;
+    await seed(identity, { registrationId: 'reg-1' });
+    await seed(rate, { count: 1 });
+    await assertFails(getDoc(doc(adminDb(), identity)));
+    await assertFails(getDoc(doc(adminDb(), rate)));
   });
 });
 

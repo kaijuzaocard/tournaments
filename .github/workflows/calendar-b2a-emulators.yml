@@ -1,0 +1,49 @@
+name: Calendar B2A emulator verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/calendar-preregistration-b2a
+  pull_request:
+    paths:
+      - 'functions/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'firestore.rules'
+      - 'firebase.json'
+      - 'package*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix functions
+      - run: npm test
+      - run: npm run test:functions
+      - run: npm run build
+      - name: Load Functions entry
+        run: node -e "import('./functions/index.js')"
+      - run: npm run lint
+      - name: Node syntax checks
+        shell: bash
+        run: |
+          while IFS= read -r file; do node --check "$file"; done < <(find functions scripts tests src/utils -type f -name '*.js' -not -path '*/node_modules/*')
+          node --check eslint.config.js
+      - name: Diff whitespace check
+        run: git diff --check HEAD^ HEAD
+      - run: npm run test:rules
+      - run: npm run test:emulators

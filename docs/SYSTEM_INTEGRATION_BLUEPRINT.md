@@ -318,6 +318,68 @@ B3 原則：即使未來改成直接上傳/Callable，仍保留 JSON v2、previe
 - localStorage、cloud current/history、QR、JSON v2、配對、排名、tombstone 既有測試不回歸。
 - Calendar/Swiss 可各自關閉整合功能，手動流程仍完整。
 
+# 16. B2A 行事曆賽事預報名
+
+## 16.1 責任與權威
+
+- Calendar 是活動預報名設定、預報名 entry 與 `registrationId` 的唯一寫入權威。
+- 顧客不直接存取 Firestore private 路徑；提交、本人查詢、修改與取消只經 Callable Functions。
+- B2A 不修改 B1 Calendar → Swiss payload，也不將玩家名單送入 Swiss。
+- 公開活動文件只保存 `preRegistration` 設定，不保存名單、管理 token、IP 或稽核資料。
+- 公開頁只讀 `tournamentPreRegistrationStats/{calendarEventId}` 的 active 計數，不讀 entry collection。
+
+## 16.2 活動設定契約
+
+```js
+preRegistration: {
+  schemaVersion: 1,
+  enabled: boolean,
+  capacity: 1..256,       // safe integer
+  deadline: Timestamp|null // Asia/Taipei
+}
+```
+
+- 欄位不存在代表尚未開放；舊活動不需 migration。
+- `enabled: false` 停止新提交但保留 entry；既有顧客仍可查看或取消自己的報名。
+- deadline 與活動開始時間由後端依 Asia/Taipei 判定；前端數值不具權威性。
+
+## 16.3 Private 路徑與 entry v1
+
+```text
+artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrations/{calendarEventId}
+artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrations/{calendarEventId}/entries/{registrationId}
+artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrations/{calendarEventId}/identities/{identityHash}
+artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrations/{calendarEventId}/operations/{operationHash}
+artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrationRateLimits/{bucketHash}
+artifacts/kaijuzaocard-main/public/data/tournamentPreRegistrationStats/{calendarEventId}
+```
+
+Entry v1 保存 `schemaVersion`, `registrationId`, `calendarEventId`, 四個顧客欄位、`status`, `tokenHash`, optional `identityHash`, `createdAt`, `updatedAt`, optional `cancelledAt`。`importedAt`, `importedTournamentId`, `handoffRevision` 保留為未來 B2B optional 欄位，本批不寫入。
+
+管理 token 是 HMAC Secret 與 request/payload fingerprint 的 256-bit deterministic output；Firestore 只保存另一個 purpose-separated HMAC hash。相同 requestId 與相同 payload 可恢復相同 registrationId/token；同 requestId 不同 payload fail closed。Token 只放管理 URL fragment，入口在載入 React、Firebase 與其他應用程式模組前清除 fragment，且不寫入 browser storage。
+
+## 16.4 重複、容量與限流
+
+- transaction 重新讀活動、鎖 aggregate、重新計算 active entries，再同時建立 entry、identity index、operation 與公開 count，因此並行請求不可突破 capacity。
+- officialId 優先、否則 honorId，正規化後以 HMAC 作事件內 active duplicate index；沒有穩定 ID 時不使用 playerName 去重。
+- submit IP：8/10 分鐘；event + identity：3/小時；manage IP：30/5 分鐘。只使用可信 `rawRequest.ip`，Firestore 僅保存 HMAC 與 `expiresAt`。
+- 管理 token 錯誤與 entry 不存在共用模糊錯誤；取消保留 entry 並立即釋放 identity/capacity。
+- 管理連結生命週期：活動存在時 `get` 永遠可讀本人最小摘要；關閉或 deadline 後禁止 update，但活動開始前仍可 cancel；活動開始後僅供摘要查閱，不可 update/cancel。
+- 活動文件刪除後，正確 token 也只得到一般化 `EVENT_UNAVAILABLE`，不回傳孤兒 entry；private entry 仍保留且只供管理員讀取。
+- 管理員降低 capacity 不取消既有 active entries；只阻止後續 submit。取消後 active count 與 identity index 同步釋放，相同 officialId/honorId 可重新報名。
+- App Check B2A 首次上線採 monitor，不在 Console 與流量觀察完成前 enforce；剩餘風險是分散式機器人可跨 IP 消耗名額。
+
+## 16.5 Rules 與生命週期
+
+- Public 可讀活動設定與 aggregate count。
+- 未登入、匿名 Auth、一般 Google 使用者不可直接讀寫 private entry；Calendar allowlisted Google 管理員只可 read/list entries。
+- identity、operation 與 rate-limit 文件對所有 Client 保持拒絕；Functions Admin SDK 是顧客操作唯一寫入者。
+- 活動刪除不 cascade：若有 entries，先關閉報名並保留 private subtree 作稽核。未來另做精確 event-ID、雙重確認、保留期（建議至少 180 天）的管理清理 Function；B2A 不自動刪除或孤兒回收。
+
+## 16.6 B2B 預留
+
+未來 B2B 只可從 active entries 建立短效、一次性、高熵 handoff code，傳送 `registrationId`, `playerName`, `officialId`, `deckName`, `honorId`。玩家名單與 token 不放 URL；B2A 不實作 handoff、待報到或 Swiss import。
+
 ---
 
 ## Git 狀態快照（2026-08-01）

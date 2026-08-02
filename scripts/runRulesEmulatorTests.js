@@ -28,6 +28,12 @@ if (!process.env.VITE_FIREBASE_ADMIN_UIDS && fs.existsSync(localEnvFile)) {
 }
 
 if (!process.env.VITE_FIREBASE_ADMIN_UIDS) {
+  const rulesSource = fs.readFileSync(path.join(projectRoot, 'firestore.rules'), 'utf8');
+  const allowlistMatch = rulesSource.match(/request\.auth\.uid\s+in\s+\[\s*'([^']+)'/);
+  if (allowlistMatch) process.env.VITE_FIREBASE_ADMIN_UIDS = allowlistMatch[1];
+}
+
+if (!process.env.VITE_FIREBASE_ADMIN_UIDS) {
   throw new Error('VITE_FIREBASE_ADMIN_UIDS is required for Rules tests.');
 }
 
