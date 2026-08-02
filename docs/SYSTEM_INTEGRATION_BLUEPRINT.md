@@ -193,6 +193,10 @@ B1 明確不做：玩家名單、電話、Honor ID、預報名、獎勵計算、
 - Calendar event 刪除不級聯刪除 Swiss tournament。
 - Swiss tournament/archive 刪除不自動清除 Calendar link；Calendar 顯示「連結失效，需要人工確認」。
 - 重新建立前必須有明確 unlink/recreate 操作與提示；B1 不做自動解除。
+- `swissIntegration` 的 canonical 未連結狀態是欄位不存在；完整有效物件才代表已連結。
+- 舊版 `{ schemaVersion: 1, swissTournamentId: null, linkedAt: null }` 只保留讀取相容，視為未連結，不得再由新版程式寫入。
+- 管理員清除失效關聯時，以 transaction 重讀活動並比對預期 tournament ID，再用 `deleteField()` 只移除 `swissIntegration`；不刪除或覆蓋 Calendar event 文件。
+- schema、欄位或型別不符合契約的 malformed 關聯一律 fail closed，不開啟、不清除，也不以 null object 覆寫。
 
 ## 9.5 `topCut` 語意
 

@@ -14,6 +14,11 @@ import {
   parseAllowedOrigins,
   parseSwissCancelledReturnUrl,
 } from './utils/swissHandoff.js';
+import {
+  classifySwissIntegration,
+  clearSwissIntegrationSafely,
+  removeSwissIntegrationKey,
+} from './utils/swissIntegration.js';
 
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
@@ -42,6 +47,11 @@ const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
 const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
 const swissAppUrl = import.meta.env.VITE_SWISS_APP_URL || DEFAULT_SWISS_APP_URL;
 const allowedSwissOrigins = parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl);
+
+const classifyTournamentSwissIntegration = (tournamentItem) => classifySwissIntegration(
+  tournamentItem?.swissIntegration,
+  { fieldPresent: Object.prototype.hasOwnProperty.call(tournamentItem ?? {}, 'swissIntegration') },
+);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -116,6 +126,7 @@ export default function App() {
   const hasRandomizedBanner = useRef(false);
   const pendingSwissRef = useRef(new Map());
   const swissPopupTimersRef = useRef(new Map());
+  const swissClearInFlightRef = useRef(new Set());
   const isAdminAuth = isFirebaseAdmin(user);
 
   const showToast = (msg) => {
@@ -155,7 +166,12 @@ export default function App() {
         await runTransaction(db, async (transaction) => {
           const snapshot = await transaction.get(tournamentRef);
           if (!snapshot.exists()) throw new Error('CALENDAR_EVENT_NOT_FOUND');
-          const linkedTournamentId = snapshot.data()?.swissIntegration?.swissTournamentId || '';
+          const eventData = snapshot.data();
+          const integration = classifySwissIntegration(eventData.swissIntegration, {
+            fieldPresent: Object.prototype.hasOwnProperty.call(eventData, 'swissIntegration'),
+          });
+          if (integration.status === 'malformed') throw new Error('SWISS_INTEGRATION_MALFORMED');
+          const linkedTournamentId = integration.status === 'linked' ? integration.tournamentId : '';
           const decision = decideSwissIntegrationUpdate(linkedTournamentId, message.value.tournamentId);
           if (decision === 'conflict') throw new Error('SWISS_LINK_CONFLICT');
           if (decision === 'unchanged') return;
@@ -192,7 +208,12 @@ export default function App() {
       showToast('此功能僅限已授權的 Google 管理員。');
       return;
     }
-    const linked = !!tournamentItem?.swissIntegration?.swissTournamentId;
+    const integration = classifyTournamentSwissIntegration(tournamentItem);
+    if (integration.status === 'malformed') {
+      setSwissStatus(tournamentItem.id, 'failed', '瑞士制關聯格式異常，請先由管理員確認資料狀態。');
+      return;
+    }
+    const linked = integration.status === 'linked';
     const active = Array.from(pendingSwissRef.current.values())
       .find((pending) => pending.calendarEventId === tournamentItem.id && !pending.popup?.closed);
     if (active) {
@@ -252,17 +273,38 @@ export default function App() {
   };
 
   const clearSwissIntegration = async (tournamentItem) => {
-    if (!isAdminAuth || !tournamentItem?.swissIntegration?.swissTournamentId) return;
-    if (!confirm('確定要清除這場活動的瑞士制關聯？這不會刪除瑞士制賽事。')) return;
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', tournamentItem.id), {
-        swissIntegration: { schemaVersion: 1, swissTournamentId: null, linkedAt: null },
-      });
+    if (!isAdminAuth || !tournamentItem?.id || swissClearInFlightRef.current.has(tournamentItem.id)) return;
+    const integration = classifyTournamentSwissIntegration(tournamentItem);
+    if (integration.status === 'unlinked') {
       setSwissStatus(tournamentItem.id, 'idle');
-      showToast('已清除失效關聯；原瑞士制資料不受影響。');
+      return;
+    }
+    if (integration.status === 'malformed') {
+      setSwissStatus(tournamentItem.id, 'failed', '瑞士制關聯格式異常，未執行清除。');
+      return;
+    }
+    if (!confirm('確定要清除這場活動的瑞士制關聯？這不會刪除瑞士制賽事。')) return;
+    swissClearInFlightRef.current.add(tournamentItem.id);
+    setSwissStatus(tournamentItem.id, 'clearing');
+    try {
+      await clearSwissIntegrationSafely({
+        db,
+        appId,
+        calendarEventId: tournamentItem.id,
+        expectedTournamentId: integration.status === 'linked' ? integration.tournamentId : '',
+        currentUser: user,
+        isAdminUser: isFirebaseAdmin,
+      });
+      setTournaments((current) => current.map((item) => (
+        item.id === tournamentItem.id ? removeSwissIntegrationKey(item) : item
+      )));
+      setSwissStatus(tournamentItem.id, 'idle');
+      showToast('已清除失效關聯，活動內容不受影響。');
     } catch (error) {
       const code = error?.code || error?.message || 'SWISS_UNLINK_FAILED';
       setSwissStatus(tournamentItem.id, 'failed', `清除關聯失敗（${code}）。`);
+    } finally {
+      swissClearInFlightRef.current.delete(tournamentItem.id);
     }
   };
 
@@ -1665,24 +1707,35 @@ export default function App() {
                                   <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
                                     <button
                                       type="button"
-                                      disabled={swissStatuses[t.id]?.status === 'preparing'}
+                                      disabled={['preparing', 'clearing'].includes(swissStatuses[t.id]?.status) || classifyTournamentSwissIntegration(t).status === 'malformed'}
                                       onClick={() => handleSwissTournament(t)}
                                       className="w-full px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-60"
                                     >
-                                      {t.swissIntegration?.swissTournamentId ? <ExternalLink className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
-                                      {t.swissIntegration?.swissTournamentId
+                                      {classifyTournamentSwissIntegration(t).status === 'linked' ? <ExternalLink className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
+                                      {classifyTournamentSwissIntegration(t).status === 'linked'
                                         ? '開啟瑞士制賽事'
+                                        : swissStatuses[t.id]?.status === 'clearing'
+                                          ? '正在清除關聯……'
                                         : swissStatuses[t.id]?.status === 'preparing'
                                           ? '準備瑞士制資料……'
                                           : swissStatuses[t.id]?.status === 'failed'
                                             ? '建立失敗／重新嘗試'
                                             : '建立瑞士制賽事'}
                                     </button>
-                                    {t.swissIntegration?.swissTournamentId && (
+                                    {classifyTournamentSwissIntegration(t).status === 'linked' && (
                                       <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                                        <span className="text-indigo-700 font-bold">已連結：{t.swissIntegration.swissTournamentId}</span>
-                                        <button type="button" onClick={() => clearSwissIntegration(t)} className="text-rose-600 font-bold hover:underline">清除失效連結</button>
+                                        <span className="text-indigo-700 font-bold">已連結：{classifyTournamentSwissIntegration(t).tournamentId}</span>
+                                        <button type="button" disabled={swissStatuses[t.id]?.status === 'clearing'} onClick={() => clearSwissIntegration(t)} className="text-rose-600 font-bold hover:underline disabled:opacity-60">清除失效連結</button>
                                       </div>
+                                    )}
+                                    {classifyTournamentSwissIntegration(t).status === 'legacy_unlinked' && (
+                                      <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                                        <span className="text-amber-700 font-bold">偵測到舊版失效關聯</span>
+                                        <button type="button" disabled={swissStatuses[t.id]?.status === 'clearing'} onClick={() => clearSwissIntegration(t)} className="text-rose-600 font-bold hover:underline disabled:opacity-60">清除失效連結</button>
+                                      </div>
+                                    )}
+                                    {classifyTournamentSwissIntegration(t).status === 'malformed' && (
+                                      <p role="alert" className="mt-2 text-xs font-bold text-rose-700">瑞士制關聯格式異常，請先確認資料狀態。</p>
                                     )}
                                     {swissStatuses[t.id]?.error && <p role="alert" className="mt-2 text-xs font-bold text-rose-700">{swissStatuses[t.id].error}</p>}
                                   </div>

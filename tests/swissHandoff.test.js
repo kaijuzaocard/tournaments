@@ -16,8 +16,50 @@ import {
   validateSwissCancelledMessage,
   validateSwissCreatedMessage,
 } from '../src/utils/swissHandoff.js';
+import {
+  classifySwissIntegration,
+  clearSwissIntegrationSafely,
+  removeSwissIntegrationKey,
+} from '../src/utils/swissIntegration.js';
 
 const HANDOFF_ID = 'handoff-1';
+const LINKED_AT = Object.freeze({ seconds: 1_785_555_600, nanoseconds: 0 });
+
+function createSwissIntegrationHarness(initialData, { exists = true } = {}) {
+  const deleteSentinel = Symbol('delete-field');
+  let data = initialData;
+  const updates = [];
+  const firestore = {
+    deleteField: () => deleteSentinel,
+    doc: (_db, ...segments) => ({ path: segments.join('/') }),
+    runTransaction: async (_db, operation) => operation({
+      get: async () => ({ exists: () => exists, data: () => data }),
+      update: (_reference, payload) => {
+        updates.push(payload);
+        if (payload.swissIntegration === deleteSentinel) {
+          data = removeSwissIntegrationKey(data);
+        }
+      },
+    }),
+  };
+  return { deleteSentinel, firestore, getData: () => data, updates };
+}
+
+const linkedEventData = () => ({
+  title: '正式活動內容',
+  date: '2026-08-08',
+  swissIntegration: {
+    schemaVersion: 1,
+    swissTournamentId: 't_existing',
+    linkedAt: LINKED_AT,
+  },
+});
+const TEST_ADMIN = Object.freeze({ uid: 'test-admin' });
+const clearWithAdmin = (options) => clearSwissIntegrationSafely({
+  currentUser: TEST_ADMIN,
+  isAdminUser: (user) => user === TEST_ADMIN,
+  ...options,
+});
 
 const event = {
   id: 'calendar-event-1',
@@ -227,6 +269,118 @@ test('Swiss integration writes once, preserves matching links and rejects confli
   assert.equal(decideSwissIntegrationUpdate('t_existing', 't_other'), 'conflict');
 });
 
+test('Swiss integration canonical states distinguish unlinked, legacy, linked and malformed values', () => {
+  assert.deepEqual(classifySwissIntegration(undefined, { fieldPresent: false }), { status: 'unlinked', tournamentId: '' });
+  assert.deepEqual(classifySwissIntegration({ schemaVersion: 1, swissTournamentId: null, linkedAt: null }), { status: 'legacy_unlinked', tournamentId: '' });
+  assert.deepEqual(classifySwissIntegration(linkedEventData().swissIntegration), { status: 'linked', tournamentId: 't_existing' });
+  assert.deepEqual(classifySwissIntegration({ ...linkedEventData().swissIntegration, swissTournamentId: '  t_existing  ' }), { status: 'linked', tournamentId: 't_existing' });
+  assert.equal(classifySwissIntegration({ schemaVersion: 1, swissTournamentId: '', linkedAt: LINKED_AT }).status, 'malformed');
+  assert.equal(classifySwissIntegration(null, { fieldPresent: true }).status, 'malformed');
+  assert.equal(classifySwissIntegration({ swissTournamentId: null }, { fieldPresent: true }).status, 'malformed');
+  assert.equal(classifySwissIntegration({ ...linkedEventData().swissIntegration, schemaVersion: 2 }).status, 'malformed');
+  assert.equal(classifySwissIntegration({ ...linkedEventData().swissIntegration, adminNote: 'forbidden' }).status, 'malformed');
+});
+
+test('valid Swiss integration is removed with one exact deleteField update and preserves all event fields', async () => {
+  const before = linkedEventData();
+  const harness = createSwissIntegrationHarness(before);
+  const result = await clearWithAdmin({
+    db: {},
+    appId: 'calendar-app',
+    calendarEventId: 'calendar-event-1',
+    expectedTournamentId: 't_existing',
+    firestore: harness.firestore,
+  });
+
+  assert.deepEqual(result, { status: 'cleared' });
+  assert.equal(harness.updates.length, 1);
+  assert.deepEqual(Object.keys(harness.updates[0]), ['swissIntegration']);
+  assert.equal(harness.updates[0].swissIntegration, harness.deleteSentinel);
+  assert.deepEqual(harness.getData(), { title: before.title, date: before.date });
+});
+
+test('Swiss integration clear rejects conflicts, missing documents and malformed data without writes', async () => {
+  const conflict = createSwissIntegrationHarness(linkedEventData());
+  await assert.rejects(
+    clearWithAdmin({
+      db: {}, appId: 'calendar-app', calendarEventId: 'calendar-event-1', expectedTournamentId: 't_other', firestore: conflict.firestore,
+    }),
+    /SWISS_UNLINK_CONFLICT/,
+  );
+  assert.equal(conflict.updates.length, 0);
+  assert.equal(conflict.getData().swissIntegration.swissTournamentId, 't_existing');
+
+  const missing = createSwissIntegrationHarness({}, { exists: false });
+  await assert.rejects(
+    clearWithAdmin({
+      db: {}, appId: 'calendar-app', calendarEventId: 'calendar-event-1', expectedTournamentId: 't_existing', firestore: missing.firestore,
+    }),
+    /CALENDAR_EVENT_NOT_FOUND/,
+  );
+  assert.equal(missing.updates.length, 0);
+
+  const malformed = createSwissIntegrationHarness({
+    title: '活動',
+    swissIntegration: { schemaVersion: 1, swissTournamentId: 't_existing', linkedAt: null },
+  });
+  await assert.rejects(
+    clearWithAdmin({
+      db: {}, appId: 'calendar-app', calendarEventId: 'calendar-event-1', expectedTournamentId: 't_existing', firestore: malformed.firestore,
+    }),
+    /SWISS_INTEGRATION_MALFORMED/,
+  );
+  assert.equal(malformed.updates.length, 0);
+});
+
+test('unlinked and legacy-null Swiss integrations clear idempotently into the canonical unlinked state', async () => {
+  const absent = createSwissIntegrationHarness({ title: '活動' });
+  const absentResult = await clearWithAdmin({
+    db: {}, appId: 'calendar-app', calendarEventId: 'calendar-event-1', firestore: absent.firestore,
+  });
+  assert.deepEqual(absentResult, { status: 'already-unlinked' });
+  assert.equal(absent.updates.length, 0);
+
+  const legacy = createSwissIntegrationHarness({
+    title: '活動',
+    swissIntegration: { schemaVersion: 1, swissTournamentId: null, linkedAt: null },
+  });
+  await clearWithAdmin({
+    db: {}, appId: 'calendar-app', calendarEventId: 'calendar-event-1', firestore: legacy.firestore,
+  });
+  const repeated = await clearWithAdmin({
+    db: {}, appId: 'calendar-app', calendarEventId: 'calendar-event-1', firestore: legacy.firestore,
+  });
+  assert.equal(legacy.updates.length, 1);
+  assert.equal(Object.hasOwn(legacy.getData(), 'swissIntegration'), false);
+  assert.deepEqual(repeated, { status: 'already-unlinked' });
+});
+
+test('Swiss integration clear requires the current Calendar Google administrator', async () => {
+  const harness = createSwissIntegrationHarness(linkedEventData());
+  await assert.rejects(
+    clearSwissIntegrationSafely({
+      db: {},
+      appId: 'calendar-app',
+      calendarEventId: 'calendar-event-1',
+      expectedTournamentId: 't_existing',
+      currentUser: { uid: 'not-admin' },
+      isAdminUser: () => false,
+      firestore: harness.firestore,
+    }),
+    /CALENDAR_ADMIN_REQUIRED/,
+  );
+  assert.equal(harness.updates.length, 0);
+});
+
+test('local state removal omits the Swiss integration key without mutating the original event', () => {
+  const before = linkedEventData();
+  const after = removeSwissIntegrationKey(before);
+  assert.equal(Object.hasOwn(after, 'swissIntegration'), false);
+  assert.equal(Object.hasOwn(before, 'swissIntegration'), true);
+  assert.equal(after.title, before.title);
+  assert.equal(after.date, before.date);
+});
+
 test('normalizes formal integration fields without parsing the legacy fee text', () => {
   const normalized = normalizeTournamentIntegrationFields({ ...event, entryFee: '300', fee: '買兩包' });
   assert.equal(normalized.entryFee, 300);
@@ -246,9 +400,26 @@ test('App wires success-only persistence, popup failure and manual unlink confir
   assert.match(source, /if \(returnedCancellation\?\.ok\)[\s\S]*?setSwissStatus\(tournamentItem\.id, 'idle'\);[\s\S]*?popup\.close\(\)/);
   assert.match(source, /if \(!popup\.closed\) return;/);
   assert.match(source, /confirm\('確定要清除這場活動的瑞士制關聯/);
+  assert.match(source, /clearSwissIntegrationSafely\(\{/);
+  assert.match(source, /currentUser:\s*user/);
+  assert.match(source, /isAdminUser:\s*isFirebaseAdmin/);
+  assert.match(source, /removeSwissIntegrationKey\(item\)/);
+  assert.match(source, /swissClearInFlightRef\.current\.has\(tournamentItem\.id\)/);
+  assert.match(source, /swissClearInFlightRef\.current\.add\(tournamentItem\.id\)/);
+  assert.match(source, /swissClearInFlightRef\.current\.delete\(tournamentItem\.id\)/);
+  assert.doesNotMatch(source, /swissIntegration:\s*\{\s*schemaVersion:\s*1,\s*swissTournamentId:\s*null/);
   assert.match(source, /isAdminAuth &&/);
   assert.match(source, /開啟瑞士制賽事/);
+  assert.match(source, /建立瑞士制賽事/);
   assert.match(source, /pendingSwissRef = useRef\(new Map\(\)\)/);
   assert.match(source, /KJZC_SWISS_HANDOFF_\$\{payload\.handoffId\}/);
   assert.match(source, /SWISS_LINK_CONFLICT/);
+  assert.match(source, /瑞士制關聯格式異常/);
+});
+
+test('Swiss integration clearing never deletes or overwrites the event document', () => {
+  const source = fs.readFileSync(new URL('../src/utils/swissIntegration.js', import.meta.url), 'utf8');
+  assert.match(source, /transaction\.update\(eventRef, \{ swissIntegration: deleteFieldFn\(\) \}\)/);
+  assert.doesNotMatch(source, /\bdeleteDoc\s*\(/);
+  assert.doesNotMatch(source, /\bsetDoc\s*\(/);
 });
