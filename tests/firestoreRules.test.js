@@ -184,6 +184,24 @@ describe('tournament pre-registration privacy', () => {
   });
 });
 
+describe('B2B handoff privacy', () => {
+  const paths = [
+    `artifacts/${APP_ID}/private/data/tournamentPreRegistrationHandoffs/handoff-1`,
+    `artifacts/${APP_ID}/private/data/tournamentPreRegistrationHandoffOperations/operation-1`,
+    `artifacts/${APP_ID}/private/data/tournamentPreRegistrationHandoffRateLimits/bucket-1`,
+  ];
+
+  test('all handoff state is denied to every client, including Calendar administrators', async () => {
+    for (const path of paths) await seed(path, { private: true });
+    for (const db of [unauthenticatedDb(), anonymousDb(), regularGoogleDb(), adminDb()]) {
+      for (const path of paths) {
+        await assertFails(getDoc(doc(db, path)));
+        await assertFails(setDoc(doc(db, path), { forged: true }));
+      }
+    }
+  });
+});
+
 describe('public catalog collections', () => {
   test('unauthenticated visitors can read product_categories and monster_products', async () => {
     const categoriesPath = `${CATALOG_DATA_ROOT}/product_categories/category-1`;

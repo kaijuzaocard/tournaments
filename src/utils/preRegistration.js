@@ -169,6 +169,9 @@ export function removePreRegistrationSecrets(entry) {
     createdAt: entry?.createdAt ?? null,
     updatedAt: entry?.updatedAt ?? null,
     cancelledAt: entry?.cancelledAt ?? null,
+    importedAt: entry?.importedAt ?? null,
+    importedTournamentId: String(entry?.importedTournamentId || ''),
+    handoffRevision: Number.isSafeInteger(entry?.handoffRevision) ? entry.handoffRevision : null,
     managementState: ['open', 'closed', 'deadline_passed', 'event_started', 'configuration_error'].includes(entry?.managementState)
       ? entry.managementState
       : 'configuration_error',

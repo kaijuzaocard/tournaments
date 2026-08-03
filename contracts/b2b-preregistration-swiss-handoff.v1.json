@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "fragmentEnvelope": {
+    "schemaVersion": 1,
+    "handoffId": "pho_fixture_1",
+    "handoffToken": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "claimSnapshot": {
+    "schemaVersion": 1,
+    "handoffRevision": 1,
+    "handoffId": "pho_fixture_1",
+    "calendarEventId": "calendar_fixture_1",
+    "eventName": "B2B 契約測試 🎴",
+    "targetSwissTournamentId": "tournament_fixture_1",
+    "snapshotCreatedAt": 1893456000000,
+    "expiresAt": 1893456600000,
+    "entries": [
+      {
+        "registrationId": "registration_fixture_1",
+        "playerName": "契約測試玩家",
+        "officialId": "FIXTURE-001",
+        "deckName": "契約測試牌組",
+        "honorId": "HONOR-FIXTURE-001",
+        "entryUpdatedAt": 1893455999000
+      }
+    ]
+  },
+  "completeRequest": {
+    "action": "complete",
+    "handoffId": "pho_fixture_1",
+    "handoffToken": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "claimId": "claim_fixture_1",
+    "targetSwissTournamentId": "tournament_fixture_1",
+    "newlyImportedRegistrationIds": [
+      "registration_fixture_1"
+    ],
+    "reconciledRegistrationIds": []
+  },
+  "errorCodes": [
+    "HANDOFF_NOT_FOUND",
+    "HANDOFF_ALREADY_CLAIMED",
+    "HANDOFF_ALREADY_COMPLETED",
+    "CLAIM_MISMATCH",
+    "CLAIM_EXPIRED",
+    "TARGET_TOURNAMENT_MISMATCH",
+    "IMPORTED_REGISTRATION_OUT_OF_SCOPE",
+    "REGISTRATION_IMPORT_CONFLICT",
+    "COMPLETE_PAYLOAD_MISMATCH",
+    "INVALID_CALLABLE_REQUEST",
+    "ORIGIN_NOT_ALLOWED"
+  ]
+}

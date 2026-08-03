@@ -1917,6 +1917,8 @@ export default function App() {
         isAdmin={isAdminAuth}
         db={db}
         appId={appId}
+        functions={functions}
+        swissAppUrl={swissAppUrl}
         onClose={() => setAdminRegistrationEvent(null)}
       />
 

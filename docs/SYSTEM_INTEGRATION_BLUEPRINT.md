@@ -394,3 +394,87 @@ Entry v1 保存 `schemaVersion`, `registrationId`, `calendarEventId`, 四個顧�
 | 收購 `...\卡片收購系統-VercelCLI手動部署` | `main...origin/main [behind 2]`; `M .gitignore`。`origin/main=56f98c09...`，本次未操作。 |
 | 文案生成器 `...\文案生成器-git推送自動部署` | `main...origin/main`; `M .gitignore`。 |
 | 營收 Apps Script `...\營收試算表-AppsScript` | 不是 Git repository。 |
+
+# 17. B2B 預報名名單交接至瑞士制
+
+## 17.1 權威與邊界
+
+- Calendar 仍是預報名 entry、active/cancelled 狀態與 imported metadata 的唯一權威。
+- Swiss 只接收由 Calendar Functions 產生的短效快照，不直接讀取 Calendar private collection。
+- B2B 只匯入至已存在且已由 B1 連結的 Swiss tournament；不建立、清除、封存或替換 current workspace。
+- Handoff 是快照，不是即時同步。完成交接後 Calendar 的修改或取消不會自動改動 Swiss 玩家。
+- B1 metadata handoff 與 B2B preregistration handoff 使用不同 action、parser、UI 與資料契約。
+
+## 17.2 Handoff 狀態機與私有資料
+
+```text
+ready -> claimed -> completed
+          |
+          +-> ready (release)
+```
+
+- ready/claimed handoff TTL 為 10 分鐘；claim lease 為 5 分鐘。完成後會把同一 `expiresAt` 延長為 24 小時，供 Calendar status polling 與 exactly-once replay；不沿用原本 10 分鐘期限立即刪除 completed 狀態。
+- 同一 claimId replay 為冪等；有效 lease 期間的其他 claimId 被拒絕。
+- `complete` 以 target tournament、`newlyImportedRegistrationIds` 與 `reconciledRegistrationIds` fingerprint 冪等；兩個陣列必須互斥、都只能來自同一 snapshot，不同完成 payload fail closed。
+- `complete` transaction 只對已在精確 target 持久化或安全補標的 entry 增加 `importedAt`, `importedTournamentId`, `handoffRevision`，不刪除 entry、不改 status。
+- 私有路徑為 `tournamentPreRegistrationHandoffs`, `tournamentPreRegistrationHandoffOperations`, `tournamentPreRegistrationHandoffRateLimits`，所有 Client 均 deny。
+- Firestore 只保存 handoff token 的 purpose-separated HMAC hash；claimId、IP 與 requestId 也只保存 purpose-separated hash 或必要的非敏感 metadata。
+
+## 17.3 Token、Secret 與 Origin
+
+- B2B 使用獨立 Secret `CALENDAR_SWISS_HANDOFF_HMAC_KEY`，不得沿用 `CALENDAR_REGISTRATION_HMAC_KEY`。
+- Secret 至少 32 bytes；缺失時 Functions fail closed，沒有預設弱金鑰。
+- Server admin allowlist 由 `CALENDAR_ADMIN_UIDS` 提供；不得硬編碼或從 Client 權限推論。
+- `CALENDAR_SWISS_HANDOFF_ALLOWED_ORIGINS` 是 exact origin allowlist；禁止 wildcard、Vercel 通配網域、帶 path/query/fragment 的值。
+- Token 只存在 Swiss URL fragment 的精確 `{schemaVersion,handoffId,handoffToken}` envelope；URL 不含玩家資料。
+- claim snapshot 使用精確欄位 `schemaVersion`, `handoffRevision`, `handoffId`, `calendarEventId`, `eventName`, `targetSwissTournamentId`, `snapshotCreatedAt`, `expiresAt`, `entries`。每個 entry 只含 `registrationId`, `playerName`, `officialId`, `deckName`, `honorId`, `entryUpdatedAt`。
+- Swiss bootstrap 在 React、Firebase 與 App 載入前解析並清除 fragment，token 不進 localStorage、sessionStorage、log 或 analytics。
+
+## 17.4 Calendar 建立與狀態 UI
+
+- 管理員只能在未開始、B1 已連結、仍有 active entry 的活動建立快照。
+- active 且未匯入者預設選取，上限 128；cancelled、已匯入同一 tournament、已匯入其他 tournament 與 malformed entry 不可選。
+- Calendar 先同步保留 popup，再呼叫 create Function；popup 被阻擋時不建立 handoff。
+- Calendar 只保存非敏感 handoffId/status 於 React state，使用管理員 status Function 輪詢 `ready/claimed/completed/expired`。
+- Backend `completed` 是完成權威；popup 關閉不等於失敗或完成。
+
+## 17.5 Swiss 匯入與待報到模型
+
+- Swiss 必須先完成既有 Google 管理員登入；B2B dialog 不提供第二層登入。
+- claim 後必須同時確認 local/current 與 cloud/current 的 `tournamentId`、`calendarEventId` 和 canonical payload 一致。
+- Calendar 的 create/status callable 只允許 Calendar 管理員；跨 Firebase project 的 Swiss manage callable 以 256-bit capability token、精確 Swiss origin、TTL、claim lease 與 rate limit 組成授權邊界，Swiss UI 在 claim 前另行要求既有 Swiss 管理員 session。
+- 真正寫入前取得 exclusive Web Lock，再重新讀 localStorage 與 cloud revision；任一變化即停止。
+- 新 Swiss player 使用新的內部 `player.id`，不以 registrationId 當主鍵，並保存 `source`, `sourceRegistrationId`, `sourceCalendarEventId`, `sourceHandoffId`, `sourceHandoffRevision`, `importedAt`。
+- 匯入玩家一律 `checkedIn:false`。待報到玩家不參與配對、排名、Bye、抽獎、正式 participant count、history participant snapshot 或 JSON v2 participant output。
+- 店員可在 setup 階段逐筆完成報到；此操作保存至 local/cloud current，不會反向修改 Calendar entry。賽事開始後不能直接把 pending 玩家塞入進行中回合，只能經店員明確確認轉為既有 Late Entry 模型，從下一輪加入並套用前輪補敗規則；淘汰賽或已結束狀態不允許此轉換。
+
+## 17.6 Conflict 與提交順序
+
+- Conflict 分類順序固定為 malformed -> same-target `sourceRegistrationId` already_imported -> officialId conflict -> honorId conflict -> name warning -> new。
+- `sourceRegistrationId` 相同且 `sourceCalendarEventId` 相符為 `already_imported`。同一 handoff/revision 可重試原 complete；新 handoff 對同一活動可放入 `reconciledRegistrationIds` 補標 Calendar，但不得新增第二個 Swiss player。
+- source registration 出現在不同活動或不同 target 時為 conflict，不得補標。
+- officialId 或 honorId 相同但 source 不同為 `identity_conflict`，不可匯入。
+- incoming 沒有穩定 ID 且同名為 `name_warning`，需店員明確選取。
+- 不完整、重複 source ID 或未知欄位為 `malformed`，不可匯入。
+- 成功順序：cloud revision transaction -> localStorage save -> React state -> Calendar `complete`。
+- local save 失敗時以 commit revision 精確 rollback cloud；rollback conflict 必須停止並保留現場。
+- Calendar complete 暫時失敗時玩家已安全保存，UI 只重試 complete，不再新增玩家。頁面刷新導致 capability 消失時不得保存 token；由 Calendar 建立新 handoff，再以 exact target/source reconciliation 完成補標。
+- Swiss 玩家若日後被人工刪除，而 Calendar 已標為 imported，不自動解除或重建；這是人工資料修復流程，避免跨工具靜默改寫。
+
+## 17.7 上線順序與 TTL
+
+1. 人工建立 `CALENDAR_SWISS_HANDOFF_HMAC_KEY`，只查 metadata，不讀值。
+2. 精確設定 Calendar Functions 的 `CALENDAR_ADMIN_UIDS` 與 `CALENDAR_SWISS_HANDOFF_ALLOWED_ORIGINS`。
+3. 發布完整合併 Firestore Rules，確認三個 B2B private path 全 Client deny。
+4. 只部署三支 B2B Functions；確認 Gen 2、`asia-east1`、Node.js 22 與 Secret binding。
+5. 先部署 Calendar B2B Preview，再部署 Swiss B2B Preview，執行零寫入與受控寫入驗收。
+6. 分別建立三個 TTL collection group：`tournamentPreRegistrationHandoffs.expiresAt`、`tournamentPreRegistrationHandoffOperations.expiresAt`、`tournamentPreRegistrationHandoffRateLimits.expiresAt`。handoff ready/claimed 10 分鐘、completed 24 小時；operation 24 小時；rate-limit 為兩個視窗。不得把 TTL 套到 entries、events、stats、identities 或任何 Swiss 資料。
+7. 驗收完成後才依序合併 Swiss、Calendar main；Production smoke test 不確認匯入。
+
+本地實作階段不建立 Secret、不設定 runtime origin、不建立 TTL、不發布 Rules/Functions/Preview，也不讀寫 Production 資料。
+
+## 17.8 跨 repository 契約與 CI
+
+- Canonical fixture 為 Calendar `contracts/b2b-preregistration-swiss-handoff.v1.json`，涵蓋 fragment、claim、complete、error codes 與 schemaVersion；Swiss 保留 byte-identical copy。
+- Calendar CI 使用 Node.js 22、Java 21 與 demo project，執行 Calendar/Functions unit、Rules Emulator、Functions+Firestore Emulator、實際 HTTP callable/CORS 與 concurrent claim 測試，不載入 Production credentials、不 deploy。
+- Swiss CI 使用 Node.js 22 執行 unit/build/node check/diff check；兩邊 CI 都 checkout 對方指定 B2B branch 並以 byte compare 阻止 fixture drift。

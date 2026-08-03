@@ -17,7 +17,7 @@ if (fs.existsSync(secretOverride)) {
 
 let status = 1;
 try {
-  fs.writeFileSync(secretOverride, `CALENDAR_REGISTRATION_HMAC_KEY=${emulatorSecret}\n`, { flag: 'wx' });
+  fs.writeFileSync(secretOverride, `CALENDAR_REGISTRATION_HMAC_KEY=${emulatorSecret}\nCALENDAR_SWISS_HANDOFF_HMAC_KEY=${emulatorSecret}-handoff\n`, { flag: 'wx' });
   const result = spawnSync(process.execPath, [
     firebaseCli,
     'emulators:exec',
@@ -30,7 +30,12 @@ try {
     `node --test "${testFile}"`,
   ], {
     cwd: os.tmpdir(),
-    env: { ...process.env, GCLOUD_PROJECT: 'demo-kaijuzaocard-calendar-functions' },
+    env: {
+      ...process.env,
+      GCLOUD_PROJECT: 'demo-kaijuzaocard-calendar-functions',
+      CALENDAR_ADMIN_UIDS: 'emulator-calendar-admin',
+      CALENDAR_SWISS_HANDOFF_ALLOWED_ORIGINS: 'http://127.0.0.1:4173',
+    },
     stdio: 'inherit',
   });
   status = result.status ?? 1;

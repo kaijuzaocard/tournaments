@@ -1,10 +1,11 @@
-name: Calendar B2A emulator verification
+name: Calendar B2A and B2B emulator verification
 
 on:
   workflow_dispatch:
   push:
     branches:
       - feat/calendar-preregistration-b2a
+      - feat/preregistration-swiss-handoff-b2b
   pull_request:
     paths:
       - 'functions/**'

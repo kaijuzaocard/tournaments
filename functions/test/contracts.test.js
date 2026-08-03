@@ -68,10 +68,32 @@ test('deterministic credentials recover the same 256-bit token without storing p
   assert.throws(() => deterministicCredentials('weak', 'request-1', 'fingerprint'), /HMAC_SECRET_UNAVAILABLE/);
 });
 
-test('the deploy entry exports only the two B2A callable operations', () => {
+test('the deploy entry preserves B2A callables and exports the three B2B operations', () => {
   const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   assert.match(source, /export const submitTournamentPreRegistration/);
   assert.match(source, /export const manageTournamentPreRegistration/);
+  assert.match(source, /export const createTournamentPreRegistrationHandoff/);
+  assert.match(source, /export const manageTournamentPreRegistrationHandoff/);
+  assert.match(source, /export const getTournamentPreRegistrationHandoffStatus/);
+});
+
+test('cross-project manage uses the capability boundary while create and status require Calendar admin', () => {
+  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const createSection = source.slice(
+    source.indexOf('export const createTournamentPreRegistrationHandoff'),
+    source.indexOf('export const manageTournamentPreRegistrationHandoff'),
+  );
+  const manageSection = source.slice(
+    source.indexOf('export const manageTournamentPreRegistrationHandoff'),
+    source.indexOf('export const getTournamentPreRegistrationHandoffStatus'),
+  );
+  const statusSection = source.slice(source.indexOf('export const getTournamentPreRegistrationHandoffStatus'));
+  assert.match(createSection, /requireCalendarAdmin\(request\)/);
+  assert.doesNotMatch(manageSection, /requireCalendarAdmin\(request\)/);
+  assert.match(manageSection, /onRequest\(handoffHttpOptions/);
+  assert.match(manageSection, /applyExactHandoffCors\(request, response\)/);
+  assert.match(manageSection, /request\.headers\.origin/);
+  assert.match(statusSection, /requireCalendarAdmin\(request\)/);
 });
 
 test('stable JSON fingerprint input is key-order independent', () => {

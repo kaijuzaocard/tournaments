@@ -90,6 +90,18 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrationHandoffs/{documentId} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrationHandoffOperations/{documentId} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrationHandoffRateLimits/{documentId} {
+      allow read, write: if false;
+    }
+
     match /artifacts/{appId}/public/data/game_categories/{documentId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();

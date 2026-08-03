@@ -18,6 +18,7 @@ import {
   storeGeneratedManagementUrl,
   withManagementToken,
 } from '../utils/managementTokenBootstrap.js';
+import PreRegistrationSwissImportControls from './PreRegistrationSwissImportControls.jsx';
 
 const EMPTY_FORM = Object.freeze({ playerName: '', officialId: '', deckName: '', honorId: '' });
 
@@ -248,7 +249,7 @@ export function RegistrationManagementDialog({ functions, onClose }) {
   );
 }
 
-export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, onClose }) {
+export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, functions, swissAppUrl, onClose }) {
   const [entries, setEntries] = useState([]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('active');
@@ -288,6 +289,7 @@ export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, on
             </div>
           ))}</div>
         )}
+        {!error && <PreRegistrationSwissImportControls event={event} entries={entries} isAdmin={isAdmin} functions={functions} swissAppUrl={swissAppUrl} />}
         <div className="mt-5 flex items-center gap-2 text-xs text-gray-500 font-bold"><ShieldCheck className="w-4 h-4" /> 名單僅在管理員視窗開啟期間讀取；不顯示 token、IP 或內部稽核資料。</div>
       </div>
     </div>
