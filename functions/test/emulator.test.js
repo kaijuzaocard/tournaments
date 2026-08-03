@@ -9,6 +9,7 @@ const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 const integrationTest = enabled ? test : test.skip;
 const PROJECT_ID = 'demo-kaijuzaocard-calendar-functions';
 const SECRET = 'emulator-only-secret-with-at-least-thirty-two-bytes';
+const HANDOFF_SECRET = `${SECRET}-handoff`;
 const EVENT_ROOT = 'artifacts/kaijuzaocard-main/public/data/monster_tournaments';
 const PRIVATE_ROOT = 'artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrations';
 const HANDOFF_ROOT = 'artifacts/kaijuzaocard-main/private/data/tournamentPreRegistrationHandoffs';
@@ -114,7 +115,7 @@ beforeEach(async () => {
     db,
     FieldValue,
     Timestamp,
-    secret: SECRET,
+    secret: HANDOFF_SECRET,
     allowedOrigins: new Set(['https://swiss.example.test']),
     now: () => clock,
   });
