@@ -58,7 +58,10 @@ Use Node 22 and Java 21. From the repository root, run these commands in order:
    ```
 
    The ignored manifest is written to
-   `artifacts/b4a-p1/browser-preview-manifest.json`.
+   `artifacts/b4a-p1/browser-preview-manifest.json`. The seed also imports one
+   fixed fictional Google-provider user into Auth Emulator. The manifest keeps
+   only public fixture metadata; it contains no Firebase token, management
+   token, credential, or HMAC secret.
 
 5. Start the fixed frontend in terminal C:
 
@@ -75,8 +78,9 @@ Use Node 22 and Java 21. From the repository root, run these commands in order:
 ### Auth Emulator mock Google administrator
 
 The app first signs in anonymously against Auth Emulator. To test the admin UI,
-open **店家後台**, choose the Google sign-in button, and use the Auth Emulator
-mock identity page. Choose the Google provider and enter only fictional values:
+open **店家後台** and choose **使用本機測試管理員登入**. This deterministic
+button appears only in the explicit emulator build and does not open the
+Production Google popup. It uses this seeded fictional identity:
 
 - User ID / `sub`: `z1JOoARRRsSFavRlGbnhZmM4NMQ2`
 - Email: `b4a-admin@example.test`
@@ -85,7 +89,22 @@ mock identity page. Choose the Google provider and enter only fictional values:
 
 This UID is the existing Rules allowlist UID. The harness does not change Rules,
 does not add a production administrator, and does not use a real Google account
-or token.
+or token. Login is accepted only after the client verifies the exact UID,
+`google.com` provider data and token sign-in provider, then successfully calls
+the existing Functions admin boundary. A mismatch signs out and fails closed.
+
+### Corrected preregistration customer-field contract
+
+The canonical customer fields are exactly `playerName`, `officialId`,
+`deckName`, and `honorId`. There is no `note`, `notes`, `remark`, or `memo`
+field. For the E4 full-race Browser check, fill all four canonical fields and
+verify that all four remain unchanged when the full-race waitlist offer appears.
+The expected record is **P4 PASS — corrected four-field contract**; a fifth
+note field must not be requested or added.
+
+Waitlist surfaces share one notice: this stage does not auto-promote or send a
+notification, so the player must save the management link and check the latest
+rank themselves.
 
 ### Stop and cleanup
 
@@ -93,8 +112,9 @@ Keep the emulators running while cleaning data:
 
 1. Stop the frontend with Ctrl+C.
 2. Run `npm run cleanup:browser` in terminal B. It removes only the demo
-   project's `artifacts` collection, the ignored manifest, and exact temporary
-   files created by the harness. It is idempotent and may be run again.
+   project's `artifacts` collection, only the fixed Auth Emulator fixture UID,
+   the ignored manifest, and exact temporary files created by the harness. It
+   is idempotent and may be run again; other Auth Emulator users are untouched.
 3. Run `npm run stop:browser` in terminal B. It uses the ignored process-state
    manifest to request a clean shutdown and removes only recorded listeners on
    the four fixed harness ports. The emulator terminal then exits.

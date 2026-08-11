@@ -1,9 +1,14 @@
 import path from 'node:path';
+import {
+  B4A_PREVIEW_ADMIN_FIXTURE,
+  B4A_PREVIEW_AUTH_ENDPOINT,
+  B4A_PREVIEW_PROJECT_ID,
+} from '../src/b4aPreviewAdminFixture.js';
 
-export const B4A_BROWSER_PROJECT_ID = 'demo-kaijuzaocard-calendar-browser';
-export const B4A_BROWSER_ADMIN_UID = 'z1JOoARRRsSFavRlGbnhZmM4NMQ2';
+export const B4A_BROWSER_PROJECT_ID = B4A_PREVIEW_PROJECT_ID;
+export const B4A_BROWSER_ADMIN_UID = B4A_PREVIEW_ADMIN_FIXTURE.uid;
 export const B4A_BROWSER_FRONTEND_ORIGIN = 'http://127.0.0.1:4174';
-export const B4A_BROWSER_AUTH_ENDPOINT = 'http://127.0.0.1:9099';
+export const B4A_BROWSER_AUTH_ENDPOINT = B4A_PREVIEW_AUTH_ENDPOINT;
 export const B4A_BROWSER_FIRESTORE_ENDPOINT = 'http://127.0.0.1:8080';
 export const B4A_BROWSER_FUNCTIONS_ENDPOINT = 'http://127.0.0.1:5001';
 export const B4A_BROWSER_MANIFEST_RELATIVE_PATH = 'artifacts/b4a-p1/browser-preview-manifest.json';

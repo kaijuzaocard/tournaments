@@ -1,6 +1,7 @@
 export const PRE_REGISTRATION_SCHEMA_VERSION = 2;
 export const PRE_REGISTRATION_LEGACY_SCHEMA_VERSION = 1;
 export const PRE_REGISTRATION_MAX_CAPACITY = 256;
+export const WAITLIST_SELF_SERVICE_NOTICE = '本階段不會自動補位，也不會發送通知；請保存管理連結，自行查看最新順位。';
 export const PRE_REGISTRATION_ENTRY_FIELDS = Object.freeze([
   'requestId',
   'calendarEventId',
@@ -9,6 +10,10 @@ export const PRE_REGISTRATION_ENTRY_FIELDS = Object.freeze([
   'deckName',
   'honorId',
 ]);
+
+export function waitlistSelfServiceNoticeForStatus(status) {
+  return status === 'waitlisted' ? WAITLIST_SELF_SERVICE_NOTICE : '';
+}
 
 const hasControlCharacters = (value) => Array.from(value)
   .some((character) => character.codePointAt(0) < 32 || character.codePointAt(0) === 127);

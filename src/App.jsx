@@ -1,10 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
-import { auth, db, functions, isFirebaseEmulatorRuntime } from './firebaseRuntime.js';
+import { auth, db, firebaseRuntimeInfo, functions, isFirebaseEmulatorRuntime } from './firebaseRuntime.js';
 import { isLoopbackUrl } from './firebaseRuntimeConfig.js';
+import { B4A_PREVIEW_ADMIN_PROBE_EVENT_ID } from './b4aPreviewAdminFixture.js';
+import {
+  B4A_PREVIEW_ADMIN_IDENTITY_MISMATCH,
+  signInWithB4APreviewAdmin,
+} from './firebaseEmulatorAdminAuth.js';
 import {
   DEFAULT_SWISS_APP_URL,
   buildSwissHandoffUrl,
@@ -51,6 +57,10 @@ const swissAppUrl = isFirebaseEmulatorRuntime
 const allowedSwissOrigins = swissAppUrl
   ? parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl)
   : new Set();
+const isB4APreviewAdminRuntime = import.meta.env.MODE === 'emulator'
+  && isFirebaseEmulatorRuntime;
+const isB4AMobilePreviewViewport = isFirebaseEmulatorRuntime
+  && new URLSearchParams(globalThis.location?.search || '').get('b4aViewport') === '375x812';
 
 const classifyTournamentSwissIntegration = (tournamentItem) => classifySwissIntegration(
   tournamentItem?.swissIntegration,
@@ -75,6 +85,7 @@ export default function App() {
 
   const [isAdminSigningIn, setIsAdminSigningIn] = useState(false);
   const [adminLoginError, setAdminLoginError] = useState('');
+  const [previewAdminProof, setPreviewAdminProof] = useState(null);
   const [weekStartsOnMonday, setWeekStartsOnMonday] = useState(false);
 
   const [playerFilters, setPlayerFilters] = useState(['All']);
@@ -367,7 +378,7 @@ export default function App() {
       setLoadingMsgIdx(prev => (prev + 1) % loadingMessages.length);
     }, 800);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadingMessages.length]);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -606,8 +617,38 @@ export default function App() {
     }
   };
 
+  const handlePreviewAdminLogin = async () => {
+    setIsAdminSigningIn(true);
+    setAdminLoginError('');
+    setPreviewAdminProof(null);
+    try {
+      const proof = await signInWithB4APreviewAdmin({
+        auth,
+        isFirebaseEmulatorRuntime,
+        runtimeInfo: firebaseRuntimeInfo,
+        browserOrigin: globalThis.location?.origin,
+        isAdminUser: isFirebaseAdmin,
+        verifyAdminAuthority: async () => {
+          const probeEvent = tournaments.find((item) => item.id === B4A_PREVIEW_ADMIN_PROBE_EVENT_ID);
+          const handoffId = probeEvent?.browserPreviewAdminProbeHandoffId;
+          if (!handoffId) return false;
+          const getStatus = httpsCallable(functions, 'getTournamentPreRegistrationHandoffStatus');
+          const response = await getStatus({ handoffId, calendarEventId: probeEvent.id });
+          return response.data?.schemaVersion === 1
+            && ['ready', 'claimed', 'completed', 'expired'].includes(response.data?.status);
+        },
+      });
+      setPreviewAdminProof(proof);
+    } catch {
+      setAdminLoginError(B4A_PREVIEW_ADMIN_IDENTITY_MISMATCH);
+    } finally {
+      setIsAdminSigningIn(false);
+    }
+  };
+
   const handleAdminLogout = async () => {
     setAdminLoginError('');
+    setPreviewAdminProof(null);
     try {
       await signOut(auth);
       await signInAnonymously(auth);
@@ -970,7 +1011,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 font-sans pb-12 relative">
+    <div data-b4a-mobile-viewport={isB4AMobilePreviewViewport ? '375x812' : undefined} className={`bg-gray-100 font-sans pb-12 relative ${isB4AMobilePreviewViewport ? 'fixed left-0 top-0 w-[375px] h-[812px] min-h-0 overflow-y-auto overflow-x-hidden' : 'min-h-screen'}`}>
       <nav className="bg-orange-600 text-white shadow-lg sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center transition-all duration-300">
           <div className="flex items-center gap-2 font-black text-xl tracking-wider cursor-pointer" onClick={() => window.location.reload()}><Store className="w-6 h-6" /> 怪獸造咔</div>
@@ -1013,7 +1054,7 @@ export default function App() {
                   點擊下方標籤，可「多選」篩選想看的遊戲喔！
                 </div>
 
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink-0">
+                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto max-w-full whitespace-normal text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink">
                   🎓 點我快速預約【新手教學】 👉
                 </button>
               </div>
@@ -1145,7 +1186,7 @@ export default function App() {
                                       <div className="flex-1 min-w-0 py-1">
                                         <div className="flex items-center flex-wrap gap-2 mb-1.5 md:mb-2">
                                           <GameBadge type={t.gameType} />
-                                          <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500"/>方案：{t.fee}</span>
+                                          <span className="max-w-full break-words text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500 shrink-0"/>方案：{t.fee}</span>
                                         </div>
                                         <h4 className="font-black text-gray-800 text-base md:text-xl leading-snug break-words pr-2">{t.title}</h4>
                                       </div>
@@ -1278,7 +1319,7 @@ export default function App() {
                                 <div className="flex-1">
                                   <div className="mb-1.5 flex items-center gap-2">
                                     <GameBadge type={t.gameType} />
-                                    <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
+                                    <span className="max-w-full break-words text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink"><Zap className="w-3 h-3 text-yellow-500 shrink-0"/>方案：{t.fee}</span>
                                   </div>
                                   <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
                                 </div>
@@ -1420,9 +1461,18 @@ export default function App() {
 
                 {adminLoginError && <p className="text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-sm font-bold break-words">{adminLoginError}</p>}
 
-                <button type="button" onClick={handleAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
-                  {isAdminSigningIn ? 'Google 登入中...' : '使用 Google 管理員帳號登入'}
-                </button>
+                {isB4APreviewAdminRuntime ? (
+                  <div className="space-y-3">
+                    <p className="text-xs font-black text-indigo-700">Preview-only · Google mock identity</p>
+                    <button type="button" onClick={handlePreviewAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-indigo-700 text-white text-lg font-black rounded-xl shadow-md hover:bg-indigo-800 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
+                      {isAdminSigningIn ? '本機測試管理員登入中...' : '使用本機測試管理員登入'}
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={handleAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
+                    {isAdminSigningIn ? 'Google 登入中...' : '使用 Google 管理員帳號登入'}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
@@ -1432,6 +1482,15 @@ export default function App() {
                     <LogOut className="w-5 h-5 md:w-6 md:h-6" /> <span className="hidden md:inline">登出</span>
                   </button>
                 </div>
+                {isB4APreviewAdminRuntime && previewAdminProof && (
+                  <div data-b4a-preview-admin-proof className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-sm font-bold text-indigo-900 break-all">
+                    <p className="font-black">Preview-only · Google mock identity 已驗證</p>
+                    <p className="mt-1">UID：{previewAdminProof.uid}</p>
+                    <p>Anonymous：{String(previewAdminProof.isAnonymous)}</p>
+                    <p>Provider：{previewAdminProof.providerId} · token sign-in provider：{previewAdminProof.signInProvider}</p>
+                    <p>Functions requireCalendarAdmin：{previewAdminProof.functionsAdminCallable}</p>
+                  </div>
+                )}
                 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div className="bg-green-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">

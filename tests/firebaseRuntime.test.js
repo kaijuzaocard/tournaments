@@ -242,6 +242,13 @@ test('the emulator banner renders only when the explicit emulator runtime is act
   assert.match(banner, /data-runtime-evidence=\{JSON\.stringify\(firebaseRuntimeInfo\)\}/);
 });
 
+test('fixed 375x812 visual harness is emulator-only and never changes admin authority', () => {
+  const app = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
+  assert.match(app, /isFirebaseEmulatorRuntime\s*&& new URLSearchParams/);
+  assert.match(app, /data-b4a-mobile-viewport/);
+  assert.doesNotMatch(app, /b4aViewport.*isAdmin|isAdmin.*b4aViewport/);
+});
+
 test('preview bootstrap failure renders a fatal stop instead of an interactive App', () => {
   const main = fs.readFileSync(new URL('../src/main.jsx', import.meta.url), 'utf8');
   assert.match(main, /LOCAL FIREBASE EMULATOR PREVIEW FAILED/);

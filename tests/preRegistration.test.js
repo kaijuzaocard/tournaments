@@ -16,8 +16,12 @@ import {
   registrationStatusLabel,
   removePreRegistrationSecrets,
   validatePreRegistrationSettings,
+  PRE_REGISTRATION_ENTRY_FIELDS,
+  WAITLIST_SELF_SERVICE_NOTICE,
+  waitlistSelfServiceNoticeForStatus,
 } from '../src/utils/preRegistration.js';
 import { captureManagementRoute } from '../src/utils/managementTokenBootstrap.js';
+import { validateManagePayload, validateSubmitPayload } from '../functions/src/contracts.js';
 
 const futureEvent = (preRegistration) => ({
   id: 'event-1',
@@ -168,6 +172,7 @@ test('management tokens are never written to browser storage', () => {
     fs.readFileSync(new URL('../src/components/PreRegistrationDialog.jsx', import.meta.url), 'utf8'),
   ].join('\n');
   assert.doesNotMatch(sources, /localStorage|sessionStorage/);
+  assert.match(sources, /consumeGeneratedManagementUrl\(\(url\) => window\.location\.assign\(url\)\)/);
 });
 
 test('customer pre-registration code uses callables and never directly writes or lists private entries', () => {
@@ -178,6 +183,37 @@ test('customer pre-registration code uses callables and never directly writes or
   assert.match(customerSection, /同意改加入候補/);
   assert.match(customerSection, /if \(consent\) payload\.allowWaitlist = true/);
   assert.doesNotMatch(customerSection, /allowWaitlist:\s*false/);
+});
+
+test('canonical preregistration entry contract preserves exactly four customer fields and no note', () => {
+  assert.deepEqual(PRE_REGISTRATION_ENTRY_FIELDS.slice(2), ['playerName', 'officialId', 'deckName', 'honorId']);
+  assert.equal(PRE_REGISTRATION_ENTRY_FIELDS.includes('note'), false);
+});
+
+test('submit and update exact-key contracts reject a note field', () => {
+  const customer = { playerName: 'Player', officialId: 'Official', deckName: 'Deck', honorId: 'Honor' };
+  assert.throws(() => validateSubmitPayload({ requestId: 'request-1', calendarEventId: 'event-1', ...customer, note: 'extra' }), /UNKNOWN_OR_MISSING_FIELDS/);
+  assert.throws(() => validateManagePayload({ action: 'update', calendarEventId: 'event-1', registrationId: 'registration-1', managementToken: 'a'.repeat(43), ...customer, note: 'extra' }), /UNKNOWN_OR_MISSING_FIELDS/);
+});
+
+test('single waitlist copy authority states no auto-promotion and no notification', () => {
+  assert.match(WAITLIST_SELF_SERVICE_NOTICE, /不會自動補位/);
+  assert.match(WAITLIST_SELF_SERVICE_NOTICE, /不會發送通知/);
+  assert.match(WAITLIST_SELF_SERVICE_NOTICE, /保存管理連結/);
+});
+
+test('active success has no waitlist notice while waitlisted success does', () => {
+  assert.equal(waitlistSelfServiceNoticeForStatus('active'), '');
+  assert.equal(waitlistSelfServiceNoticeForStatus('waitlisted'), WAITLIST_SELF_SERVICE_NOTICE);
+});
+
+test('waitlist copy adds no notification operation', () => {
+  const sources = [
+    fs.readFileSync(new URL('../src/utils/preRegistration.js', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../src/components/PreRegistrationDialog.jsx', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../functions/src/service.js', import.meta.url), 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(sources, /sendWaitlistNotification|sendWaitlistEmail|notifyWaitlist|autoPromote/);
 });
 
 test('admin entry listener is scoped to the open authorized modal and returns cleanup', () => {

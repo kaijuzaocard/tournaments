@@ -13,6 +13,8 @@ import {
   registrationStatusLabel,
   removePreRegistrationSecrets,
   shortenRegistrationId,
+  WAITLIST_SELF_SERVICE_NOTICE,
+  waitlistSelfServiceNoticeForStatus,
 } from '../utils/preRegistration.js';
 import {
   clearManagementRoute,
@@ -23,6 +25,7 @@ import {
   withManagementToken,
 } from '../utils/managementTokenBootstrap.js';
 import PreRegistrationSwissImportControls from './PreRegistrationSwissImportControls.jsx';
+import { useModalDialogFocus } from '../hooks/useModalDialogFocus.js';
 
 const EMPTY_FORM = Object.freeze({ playerName: '', officialId: '', deckName: '', honorId: '' });
 
@@ -96,6 +99,9 @@ export function PreRegistrationPanel({ event, stats, activeCount = 0, waitlisted
           <span className="text-sm font-black text-gray-500">{labels[availability.status]}</span>
         )}
       </div>
+      {availability.status === 'waitlist' && (
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-relaxed text-amber-800">{WAITLIST_SELF_SERVICE_NOTICE}</p>
+      )}
     </div>
   );
 }
@@ -112,6 +118,15 @@ export function PreRegistrationDialog({ event, allowWaitlist = false, functions,
   const [waitlistConsent, setWaitlistConsent] = useState(allowWaitlist === true);
   const [waitlistOffer, setWaitlistOffer] = useState(false);
   const requestIdRef = useRef(createRequestId());
+  const playerNameInputRef = useRef(null);
+  const { dialogRef, onDialogKeyDown } = useModalDialogFocus({
+    initialFocusRef: playerNameInputRef,
+    onClose: () => {
+      clearGeneratedManagementUrl();
+      onClose();
+    },
+    focusVersion: `${registrationId}:${waitlistOffer}:${submitting}`,
+  });
 
   const submitWithConsent = async (consent) => {
     if (submitting) return;
@@ -172,34 +187,47 @@ export function PreRegistrationDialog({ event, allowWaitlist = false, functions,
     }
   };
 
+  const openManagementPage = async () => {
+    try {
+      await consumeGeneratedManagementUrl((url) => window.location.assign(url));
+    } catch (openError) {
+      setError(errorMessage(openError));
+    }
+  };
+
   const close = () => {
     clearGeneratedManagementUrl();
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true">
+    <div ref={dialogRef} tabIndex={-1} onKeyDown={onDialogKeyDown} className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="pre-registration-dialog-title">
       <div className="w-full max-w-lg bg-white border border-gray-200 rounded-lg shadow-2xl p-6">
         <div className="flex items-start justify-between gap-4 mb-5">
-          <div><h2 className="text-xl font-black text-gray-900">{registrationId ? (registrationStatus === 'waitlisted' ? '加入候補成功' : '報名成功') : (waitlistConsent ? '加入賽事候補' : '賽事預報名')}</h2><p className="text-sm font-bold text-gray-500 mt-1">{event.title}</p></div>
-          <button type="button" onClick={close} title="關閉" className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
+          <div><h2 id="pre-registration-dialog-title" className="text-xl font-black text-gray-900">{registrationId ? (registrationStatus === 'waitlisted' ? '加入候補成功' : '報名成功') : (waitlistConsent ? '加入賽事候補' : '賽事預報名')}</h2><p className="text-sm font-bold text-gray-500 mt-1">{event.title}</p></div>
+          <button type="button" onClick={close} title="關閉" aria-label="關閉賽事預報名對話框" className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
         </div>
         {registrationId ? (
           <div className="space-y-4">
             <div className={`flex items-center gap-3 p-4 rounded-lg border ${registrationStatus === 'waitlisted' ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}><CheckCircle2 className={`w-6 h-6 ${registrationStatus === 'waitlisted' ? 'text-amber-600' : 'text-emerald-600'}`} /><div><p className={`font-black ${registrationStatus === 'waitlisted' ? 'text-amber-900' : 'text-emerald-900'}`}>{registrationStatus === 'waitlisted' ? (waitlistRankState === 'unavailable' ? '已加入候補，順位暫時無法計算' : `已加入候補${waitlistRank ? `，目前第 ${waitlistRank} 位` : ''}`) : '已取得正取席位'}</p><p className={`text-sm font-bold ${registrationStatus === 'waitlisted' ? 'text-amber-700' : 'text-emerald-700'}`}>編號：{shortenRegistrationId(registrationId)}</p></div></div>
+            {waitlistSelfServiceNoticeForStatus(registrationStatus) && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold leading-relaxed text-amber-800">{waitlistSelfServiceNoticeForStatus(registrationStatus)}</p>}
             <p className="text-sm text-gray-600 font-bold">管理連結可用來查看、修改或取消這筆報名。請立即保存，系統不會把管理憑證留在瀏覽器儲存空間。</p>
             {error && <p role="alert" className="text-sm font-bold text-rose-700">{error}</p>}
-            <button type="button" disabled={linkCopied} onClick={copyManagementUrl} className="w-full py-3 bg-gray-900 text-white font-black rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"><Clipboard className="w-4 h-4" /> {linkCopied ? '管理連結已複製並從頁面記憶體清除' : '複製管理連結'}</button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button type="button" disabled={linkCopied} onClick={copyManagementUrl} className="w-full py-3 bg-gray-900 text-white font-black rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"><Clipboard className="w-4 h-4" /> {linkCopied ? '管理連結已複製並清除' : '複製管理連結'}</button>
+              <button type="button" disabled={linkCopied} onClick={openManagementPage} className="w-full py-3 bg-indigo-700 text-white font-black rounded-lg disabled:opacity-60">直接開啟管理頁面</button>
+            </div>
           </div>
         ) : (
           <form onSubmit={submit} className="space-y-4">
-            {waitlistConsent && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">正取目前已額滿。送出後由伺服器再次確認席位；若已有空位會取得正取，若仍額滿才會加入候補。本階段不會自動補位。</p>}
-            <label className="block text-sm font-black text-gray-700">玩家名稱<input required maxLength={40} value={form.playerName} onChange={(e) => setForm({ ...form, playerName: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
+            {waitlistConsent && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold leading-relaxed text-amber-800">正取目前已額滿。送出後由伺服器再次確認席位；若已有空位會取得正取，若仍額滿才會加入候補。{WAITLIST_SELF_SERVICE_NOTICE}</p>}
+            <label className="block text-sm font-black text-gray-700">玩家名稱<input ref={playerNameInputRef} required maxLength={40} value={form.playerName} onChange={(e) => setForm({ ...form, playerName: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <label className="block text-sm font-black text-gray-700">官方玩家 ID（選填）<input maxLength={40} value={form.officialId} onChange={(e) => setForm({ ...form, officialId: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <label className="block text-sm font-black text-gray-700">使用牌組（選填）<input maxLength={80} value={form.deckName} onChange={(e) => setForm({ ...form, deckName: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <label className="block text-sm font-black text-gray-700">榮耀 ID（選填）<input maxLength={40} value={form.honorId} onChange={(e) => setForm({ ...form, honorId: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <p className="text-xs leading-relaxed text-gray-500">以上資料僅用於本場賽事辨識、名單管理與後續報到；不蒐集電話、Email 或付款資料。</p>
             {error && <p role="alert" className="text-sm font-bold text-rose-700">{error}</p>}
+            {waitlistOffer && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold leading-relaxed text-amber-800">{WAITLIST_SELF_SERVICE_NOTICE}</p>}
             {waitlistOffer && <button type="button" disabled={submitting} onClick={acceptWaitlistOffer} className="w-full py-3 bg-amber-600 text-white font-black rounded-lg disabled:opacity-60">同意改加入候補</button>}
             {!waitlistOffer && <button disabled={submitting} className={`w-full py-3 text-white font-black rounded-lg disabled:opacity-60 ${waitlistConsent ? 'bg-amber-600' : 'bg-emerald-600'}`}>{submitting ? '送出中……' : waitlistConsent ? '確認加入候補' : '送出預報名'}</button>}
           </form>
@@ -216,6 +244,15 @@ export function RegistrationManagementDialog({ functions, onClose }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const closeButtonRef = useRef(null);
+  const { dialogRef, onDialogKeyDown } = useModalDialogFocus({
+    initialFocusRef: closeButtonRef,
+    onClose: () => {
+      clearManagementRoute();
+      onClose();
+    },
+    focusVersion: `${loading}:${entry?.registrationId || ''}:${entry?.status || ''}`,
+  });
 
   useEffect(() => {
     if (!route || route.invalid) {
@@ -268,13 +305,13 @@ export function RegistrationManagementDialog({ functions, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true">
+    <div ref={dialogRef} tabIndex={-1} onKeyDown={onDialogKeyDown} className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="registration-management-dialog-title">
       <div className="w-full max-w-lg bg-white border border-gray-200 rounded-lg shadow-2xl p-6">
-        <div className="flex items-center justify-between mb-5"><h2 className="text-xl font-black text-gray-900">管理我的預報名</h2><button type="button" onClick={close} title="關閉" className="p-2 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button></div>
+        <div className="flex items-center justify-between mb-5"><h2 id="registration-management-dialog-title" className="text-xl font-black text-gray-900">管理我的預報名</h2><button ref={closeButtonRef} type="button" onClick={close} title="關閉" aria-label="關閉預報名管理對話框" className="p-2 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button></div>
         {loading ? <p className="font-bold text-gray-500">正在安全讀取報名資料……</p> : error && !entry ? <p role="alert" className="font-bold text-rose-700">{error}</p> : entry && (
           <div className="space-y-4">
             <p className="text-sm font-bold text-gray-500">報名編號：{shortenRegistrationId(entry.registrationId)} · {registrationStatusLabel(entry.status, entry.waitlistRank, entry.waitlistRankState)}</p>
-            {entry.status === 'waitlisted' && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">{entry.waitlistRankState === 'unavailable' ? '候補順位資料目前無法完整驗證，請稍後再用此管理連結查看。' : '候補席位不會在本階段自動轉為正取；請用此管理連結查看最新順位。'}</p>}
+            {entry.status === 'waitlisted' && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold leading-relaxed text-amber-800"><p>{entry.waitlistRankState === 'unavailable' ? '候補順位資料目前無法完整驗證。' : '候補順位已依目前資料計算。'}</p><p className="mt-1">{WAITLIST_SELF_SERVICE_NOTICE}</p></div>}
             {entry.managementState === 'event_started' && <p className="text-sm font-bold text-amber-700">活動已開始或結束，目前僅提供報名摘要查閱。</p>}
             {entry.managementState === 'deadline_passed' && <p className="text-sm font-bold text-amber-700">修改期限已截止；活動開始前仍可取消報名。</p>}
             {entry.managementState === 'closed' && <p className="text-sm font-bold text-amber-700">主辦方已關閉新報名與資料修改；活動開始前仍可取消。</p>}
@@ -298,6 +335,13 @@ export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, fu
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('active');
   const [error, setError] = useState('');
+  const searchInputRef = useRef(null);
+  const { dialogRef, onDialogKeyDown } = useModalDialogFocus({
+    open,
+    initialFocusRef: searchInputRef,
+    onClose,
+    focusVersion: `${event?.id || ''}:${entries.length}:${error}`,
+  });
 
   useEffect(() => {
     if (!open || !isAdmin || !event?.id) return undefined;
@@ -326,11 +370,11 @@ export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, fu
       : 0);
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true">
+    <div ref={dialogRef} tabIndex={-1} onKeyDown={onDialogKeyDown} className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="pre-registration-admin-dialog-title">
       <div className="w-full max-w-4xl max-h-[85vh] overflow-auto bg-white rounded-lg shadow-2xl p-6">
-        <div className="flex items-start justify-between gap-4 mb-5"><div><h2 className="text-xl font-black">預報名名單</h2><p className="text-sm font-bold text-gray-500">{event.title} · 正取 {entries.filter((entry) => entry.status === 'active').length} 人 · 候補 {entries.filter((entry) => entry.status === 'waitlisted').length} 人</p></div><button type="button" title="關閉" onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button></div>
+        <div className="flex items-start justify-between gap-4 mb-5"><div><h2 id="pre-registration-admin-dialog-title" className="text-xl font-black">預報名名單</h2><p className="text-sm font-bold text-gray-500">{event.title} · 正取 {entries.filter((entry) => entry.status === 'active').length} 人 · 候補 {entries.filter((entry) => entry.status === 'waitlisted').length} 人</p></div><button type="button" title="關閉" aria-label="關閉預報名名單對話框" onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button></div>
         <div className="flex flex-col sm:flex-row gap-3 mb-5">
-          <label className="relative flex-1"><Search className="w-4 h-4 absolute left-3 top-3.5 text-gray-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜尋玩家或報名編號" className="w-full pl-9 pr-3 py-3 border rounded-lg" /></label>
+          <label className="relative flex-1"><Search className="w-4 h-4 absolute left-3 top-3.5 text-gray-400" /><input ref={searchInputRef} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜尋玩家或報名編號" className="w-full pl-9 pr-3 py-3 border rounded-lg" /></label>
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className="p-3 border rounded-lg font-bold"><option value="active">正取</option><option value="waitlisted">候補</option><option value="cancelled">已取消</option><option value="all">全部</option></select>
         </div>
         {error ? <p role="alert" className="font-bold text-rose-700">{error}</p> : visible.length === 0 ? <p className="font-bold text-gray-400 py-10 text-center">沒有符合條件的預報名</p> : (

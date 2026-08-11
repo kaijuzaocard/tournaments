@@ -1,5 +1,7 @@
 const pad = (value) => String(value).padStart(2, '0');
 
+import { B4A_PREVIEW_ADMIN_FIXTURE } from '../src/b4aPreviewAdminFixture.js';
+
 function taipeiFutureDates(nowMillis) {
   const taipei = new Date(nowMillis + (8 * 60 * 60 * 1000));
   const base = Date.UTC(taipei.getUTCFullYear(), taipei.getUTCMonth(), taipei.getUTCDate() + 7);
@@ -41,4 +43,29 @@ export function buildB4ABrowserPreviewBlueprint(nowMillis = Date.now()) {
       [events[5].id]: { active: 1, waitlisted: 2, duplicateWaitlistSequence: true },
     }),
   });
+}
+
+export function buildB4ABrowserPreviewManifest({
+  blueprint,
+  registrations,
+  frontendOrigin,
+  generatedAt = new Date().toISOString(),
+}) {
+  return {
+    schemaVersion: 1,
+    projectId: 'demo-kaijuzaocard-calendar-browser',
+    frontendOrigin,
+    adminMockUid: B4A_PREVIEW_ADMIN_FIXTURE.uid,
+    adminMockProviderSub: B4A_PREVIEW_ADMIN_FIXTURE.providerSub,
+    adminMockEmail: B4A_PREVIEW_ADMIN_FIXTURE.email,
+    adminMockDisplayName: B4A_PREVIEW_ADMIN_FIXTURE.displayName,
+    authProvider: B4A_PREVIEW_ADMIN_FIXTURE.providerId,
+    generatedAt,
+    events: Object.fromEntries(blueprint.events.map((event) => [event.id, {
+      title: event.title,
+      date: event.date,
+      expected: blueprint.scenarios[event.id],
+      registrations: registrations[event.id],
+    }])),
+  };
 }

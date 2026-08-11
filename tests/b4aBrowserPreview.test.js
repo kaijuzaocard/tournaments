@@ -9,7 +9,11 @@ import {
   validateB4ABrowserBuildAttestation,
   writeB4ABrowserBuildAttestation,
 } from '../scripts/b4aBrowserPreviewAttestation.js';
-import { buildB4ABrowserPreviewBlueprint } from '../scripts/b4aBrowserPreviewData.js';
+import {
+  buildB4ABrowserPreviewBlueprint,
+  buildB4ABrowserPreviewManifest,
+} from '../scripts/b4aBrowserPreviewData.js';
+import { B4A_PREVIEW_ADMIN_FIXTURE } from '../src/b4aPreviewAdminFixture.js';
 import {
   B4A_BROWSER_ADMIN_UID,
   B4A_BROWSER_ENV_FILE_CONTENT,
@@ -193,6 +197,37 @@ test('preview fixtures are fictional and contain no production identities', () =
   const serialized = JSON.stringify(buildB4ABrowserPreviewBlueprint(0));
   assert.match(serialized, /Preview/);
   assert.doesNotMatch(serialized, /kaijuzaocard-tournaments|AIza|script\.google\.com/);
+});
+
+test('preview manifest exposes safe Auth fixture metadata and no token or secret', () => {
+  const blueprint = buildB4ABrowserPreviewBlueprint(0);
+  const registrations = Object.fromEntries(blueprint.events.map((event) => [event.id, []]));
+  const manifest = buildB4ABrowserPreviewManifest({
+    blueprint,
+    registrations,
+    frontendOrigin: 'http://127.0.0.1:4174',
+    generatedAt: '2026-08-12T00:00:00.000Z',
+  });
+  assert.equal(manifest.adminMockUid, B4A_PREVIEW_ADMIN_FIXTURE.uid);
+  assert.equal(manifest.adminMockProviderSub, B4A_PREVIEW_ADMIN_FIXTURE.providerSub);
+  assert.equal(manifest.authProvider, 'google.com');
+  assert.doesNotMatch(JSON.stringify(manifest), /managementToken|managementUrl|refreshToken|customToken|idToken|secret|HMAC/i);
+});
+
+test('Auth seed imports only the fixed Google fixture and validates the import result', () => {
+  const source = fs.readFileSync(new URL('../scripts/b4aBrowserPreviewAuthFixture.js', import.meta.url), 'utf8');
+  assert.match(source, /successCount !== 1 \|\| result\.failureCount !== 0/);
+  assert.match(source, /providerId: B4A_PREVIEW_ADMIN_FIXTURE\.providerId/);
+  assert.match(source, /deleteUser\(B4A_PREVIEW_ADMIN_FIXTURE\.uid\)/);
+  assert.doesNotMatch(source, /listUsers|deleteUsers/);
+});
+
+test('cleanup skips all Auth and Firestore networking in files-only mode', () => {
+  const source = fs.readFileSync(new URL('../scripts/cleanupB4ABrowserPreview.js', import.meta.url), 'utf8');
+  const networking = source.slice(source.indexOf("if (!process.argv.includes('--files-only'))"), source.indexOf('fs.rmSync(paths.manifest'));
+  assert.match(networking, /getAuth/);
+  assert.match(networking, /getFirestore/);
+  assert.match(networking, /deleteB4APreviewAdminFixture/);
 });
 
 test('local Functions parameters use the Rules UID and emulator-only values', () => {
