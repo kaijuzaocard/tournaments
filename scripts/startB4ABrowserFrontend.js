@@ -2,10 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { B4A_BROWSER_PROJECT_ID, assertBrowserPreviewEnvironment } from './b4aBrowserPreviewConfig.js';
+import { readB4ABrowserBuildAttestation } from './b4aBrowserPreviewAttestation.js';
+import {
+  B4A_BROWSER_PROJECT_ID,
+  assertBrowserPreviewEnvironment,
+  assertBrowserPreviewViteEnvironment,
+  browserPreviewPaths,
+} from './b4aBrowserPreviewConfig.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const paths = browserPreviewPaths(projectRoot);
 assertBrowserPreviewEnvironment(process.env);
+assertBrowserPreviewViteEnvironment(process.env);
+readB4ABrowserBuildAttestation(paths.buildAttestation);
 const assets = path.join(projectRoot, 'dist', 'assets');
 if (!fs.existsSync(assets)) throw new Error('B4A_PREVIEW_EMULATOR_BUILD_REQUIRED');
 const bundle = fs.readdirSync(assets)

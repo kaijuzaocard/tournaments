@@ -93,10 +93,18 @@ function createEmulatorFirebaseConfig(projectId) {
 
 export function createFirebaseRuntimeConfig({
   env = {},
+  buildMode,
   browserOrigin,
   injectedFirebaseConfig,
 } = {}) {
   const runtimeValue = String(env.VITE_FIREBASE_RUNTIME || '').trim();
+  const normalizedBuildMode = String(buildMode || '').trim();
+  if (normalizedBuildMode === 'emulator' && runtimeValue !== 'emulator') {
+    throw new FirebaseRuntimeConfigError('EMULATOR_BUILD_RUNTIME_MISMATCH');
+  }
+  if (runtimeValue === 'emulator' && normalizedBuildMode !== 'emulator') {
+    throw new FirebaseRuntimeConfigError('EMULATOR_RUNTIME_BUILD_MODE_MISMATCH');
+  }
   if (runtimeValue && runtimeValue !== 'production' && runtimeValue !== 'emulator') {
     throw new FirebaseRuntimeConfigError('FIREBASE_RUNTIME_INVALID');
   }

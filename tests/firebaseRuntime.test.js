@@ -42,15 +42,15 @@ test('production injected Firebase config behavior is preserved', () => {
 });
 
 test('Functions region remains asia-east1 in both runtimes', () => {
-  const production = createFirebaseRuntimeConfig({ env: {} });
-  const emulator = createFirebaseRuntimeConfig({ env: emulatorEnv(), browserOrigin: 'http://127.0.0.1:4174' });
+  const production = createFirebaseRuntimeConfig({ env: {}, buildMode: 'production' });
+  const emulator = createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' });
   assert.equal(FUNCTIONS_REGION, 'asia-east1');
   assert.equal(production.functionsRegion, 'asia-east1');
   assert.equal(emulator.functionsRegion, 'asia-east1');
 });
 
 test('explicit emulator runtime accepts one demo project and three loopback endpoints', () => {
-  const runtime = createFirebaseRuntimeConfig({ env: emulatorEnv(), browserOrigin: 'http://127.0.0.1:4174' });
+  const runtime = createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' });
   assert.equal(runtime.mode, 'emulator');
   assert.equal(runtime.projectId, 'demo-kaijuzaocard-calendar-browser');
   assert.equal(runtime.cliProjectId, runtime.projectId);
@@ -61,14 +61,14 @@ test('explicit emulator runtime accepts one demo project and three loopback endp
 
 test('emulator runtime rejects a production Firebase project ID', () => {
   assert.throws(
-    () => createFirebaseRuntimeConfig({ env: emulatorEnv({ VITE_FIREBASE_PROJECT_ID: 'kaijuzaocard-tournaments', VITE_FIREBASE_CLI_PROJECT_ID: 'kaijuzaocard-tournaments' }), browserOrigin: 'http://127.0.0.1:4174' }),
+    () => createFirebaseRuntimeConfig({ env: emulatorEnv({ VITE_FIREBASE_PROJECT_ID: 'kaijuzaocard-tournaments', VITE_FIREBASE_CLI_PROJECT_ID: 'kaijuzaocard-tournaments' }), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' }),
     /EMULATOR_PROJECT_ID_NOT_DEMO/,
   );
 });
 
 test('emulator runtime rejects a non-loopback browser origin', () => {
   assert.throws(
-    () => createFirebaseRuntimeConfig({ env: emulatorEnv(), browserOrigin: 'https://preview.example.test' }),
+    () => createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode: 'emulator', browserOrigin: 'https://preview.example.test' }),
     /BROWSER_ORIGIN_NOT_LOOPBACK/,
   );
 });
@@ -80,7 +80,7 @@ for (const [service, envName] of [
 ]) {
   test(`emulator runtime rejects a remote ${service} host`, () => {
     assert.throws(
-      () => createFirebaseRuntimeConfig({ env: emulatorEnv({ [envName]: 'firebase.example.test' }), browserOrigin: 'http://localhost:4174' }),
+      () => createFirebaseRuntimeConfig({ env: emulatorEnv({ [envName]: 'firebase.example.test' }), buildMode: 'emulator', browserOrigin: 'http://localhost:4174' }),
       /NOT_LOOPBACK/,
     );
   });
@@ -93,7 +93,7 @@ for (const envName of [
 ]) {
   test(`emulator runtime rejects missing endpoint field ${envName}`, () => {
     assert.throws(
-      () => createFirebaseRuntimeConfig({ env: emulatorEnv({ [envName]: '' }), browserOrigin: 'http://127.0.0.1:4174' }),
+      () => createFirebaseRuntimeConfig({ env: emulatorEnv({ [envName]: '' }), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' }),
       /REQUIRED|INVALID/,
     );
   });
@@ -102,7 +102,7 @@ for (const envName of [
 for (const port of ['0', '65536', 'not-a-port', '5001.5']) {
   test(`emulator runtime rejects invalid port ${port}`, () => {
     assert.throws(
-      () => createFirebaseRuntimeConfig({ env: emulatorEnv({ VITE_FIREBASE_FUNCTIONS_EMULATOR_PORT: port }), browserOrigin: 'http://127.0.0.1:4174' }),
+      () => createFirebaseRuntimeConfig({ env: emulatorEnv({ VITE_FIREBASE_FUNCTIONS_EMULATOR_PORT: port }), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' }),
       /FUNCTIONS_EMULATOR_PORT_INVALID/,
     );
   });
@@ -115,9 +115,48 @@ test('invalid runtime values fail closed', () => {
   );
 });
 
+test('emulator build mode rejects an explicit production runtime', () => {
+  assert.throws(
+    () => createFirebaseRuntimeConfig({ env: { VITE_FIREBASE_RUNTIME: 'production' }, buildMode: 'emulator' }),
+    /EMULATOR_BUILD_RUNTIME_MISMATCH/,
+  );
+});
+
+test('emulator build mode rejects a missing runtime', () => {
+  assert.throws(
+    () => createFirebaseRuntimeConfig({ env: {}, buildMode: 'emulator' }),
+    /EMULATOR_BUILD_RUNTIME_MISMATCH/,
+  );
+});
+
+test('emulator build mode with the canonical runtime creates an emulator config', () => {
+  const runtime = createFirebaseRuntimeConfig({
+    env: emulatorEnv(),
+    buildMode: 'emulator',
+    browserOrigin: 'http://127.0.0.1:4174',
+  });
+  assert.equal(runtime.mode, 'emulator');
+  assert.equal(runtime.projectId, 'demo-kaijuzaocard-calendar-browser');
+});
+
+for (const buildMode of ['production', 'development']) {
+  test(`emulator runtime rejects ${buildMode} build mode`, () => {
+    assert.throws(
+      () => createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode, browserOrigin: 'http://127.0.0.1:4174' }),
+      /EMULATOR_RUNTIME_BUILD_MODE_MISMATCH/,
+    );
+  });
+}
+
+test('normal production build mode preserves the existing production config', () => {
+  const runtime = createFirebaseRuntimeConfig({ env: {}, buildMode: 'production' });
+  assert.equal(runtime.mode, 'production');
+  assert.equal(runtime.firebaseConfig, PRODUCTION_FIREBASE_CONFIG);
+});
+
 test('emulator app and CLI project IDs must match', () => {
   assert.throws(
-    () => createFirebaseRuntimeConfig({ env: emulatorEnv({ VITE_FIREBASE_CLI_PROJECT_ID: 'demo-other' }), browserOrigin: 'http://127.0.0.1:4174' }),
+    () => createFirebaseRuntimeConfig({ env: emulatorEnv({ VITE_FIREBASE_CLI_PROJECT_ID: 'demo-other' }), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' }),
     /EMULATOR_PROJECT_ID_MISMATCH/,
   );
 });
@@ -129,7 +168,7 @@ test('loopback helpers accept only local hosts and URLs', () => {
 });
 
 test('public runtime evidence contains only the safe allowlist', () => {
-  const runtime = createFirebaseRuntimeConfig({ env: emulatorEnv(), browserOrigin: 'http://127.0.0.1:4174' });
+  const runtime = createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' });
   const evidence = createPublicRuntimeEvidence(runtime, true);
   assert.deepEqual(Object.keys(evidence).sort(), ['authEndpoint', 'connected', 'firestoreEndpoint', 'functionsEndpoint', 'mode', 'projectId']);
   assert.equal(JSON.stringify(evidence).includes('apiKey'), false);
@@ -137,7 +176,7 @@ test('public runtime evidence contains only the safe allowlist', () => {
 });
 
 test('all three emulator connectors run in Auth, Firestore, Functions order', () => {
-  const runtimeConfig = createFirebaseRuntimeConfig({ env: emulatorEnv(), browserOrigin: 'http://127.0.0.1:4174' });
+  const runtimeConfig = createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' });
   const calls = [];
   const connected = connectFirebaseEmulatorServices({
     runtimeConfig,
@@ -151,7 +190,7 @@ test('all three emulator connectors run in Auth, Firestore, Functions order', ()
 });
 
 test('connector failure is thrown and never falls back to production', () => {
-  const runtimeConfig = createFirebaseRuntimeConfig({ env: emulatorEnv(), browserOrigin: 'http://127.0.0.1:4174' });
+  const runtimeConfig = createFirebaseRuntimeConfig({ env: emulatorEnv(), buildMode: 'emulator', browserOrigin: 'http://127.0.0.1:4174' });
   let laterConnectorCalled = false;
   assert.throws(() => connectFirebaseEmulatorServices({
     runtimeConfig,
@@ -200,6 +239,7 @@ test('the emulator banner renders only when the explicit emulator runtime is act
   const banner = fs.readFileSync(new URL('../src/components/FirebaseEmulatorBanner.jsx', import.meta.url), 'utf8');
   assert.match(banner, /if \(!isFirebaseEmulatorRuntime\) return null/);
   assert.match(banner, /LOCAL FIREBASE EMULATOR PREVIEW/);
+  assert.match(banner, /data-runtime-evidence=\{JSON\.stringify\(firebaseRuntimeInfo\)\}/);
 });
 
 test('preview bootstrap failure renders a fatal stop instead of an interactive App', () => {

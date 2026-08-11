@@ -30,6 +30,13 @@ Use Node 22 and Java 21. From the repository root, run these commands in order:
    npm run build:emulator
    ```
 
+   This command uses the harness build wrapper, not a bare Vite command. It
+   removes inherited `VITE_FIREBASE_*` and Swiss values, supplies the canonical
+   demo project plus loopback endpoints, and runs `vite build --mode emulator`.
+   `.env.emulator` remains documentation and a Vite fallback; it is not the
+   build authority. A successful build writes the safe exact-shape attestation
+   `dist/b4a-emulator-build.json`.
+
 2. Create the temporary Functions emulator parameters. This stops rather than
    overwriting an existing `functions/.env.local` or
    `functions/.secret.local`:
@@ -58,6 +65,9 @@ Use Node 22 and Java 21. From the repository root, run these commands in order:
    ```sh
    npm run preview:emulator
    ```
+
+   Preview startup refuses a missing, malformed, non-demo, or remote-endpoint
+   build attestation before starting Vite preview.
 
 6. Open `http://127.0.0.1:4174/`. Verify the
    `LOCAL FIREBASE EMULATOR PREVIEW` banner and the three loopback endpoints.

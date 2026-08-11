@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:emulator": "vite build --mode emulator",
+    "build:emulator": "node scripts/withB4ABrowserPreviewEnv.js scripts/buildB4ABrowserFrontend.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:emulator": "node scripts/withB4ABrowserPreviewEnv.js scripts/startB4ABrowserFrontend.js",

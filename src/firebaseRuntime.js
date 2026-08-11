@@ -13,6 +13,7 @@ const RUNTIME_SINGLETON = Symbol.for('kaijuzaocard.firebaseRuntime.singleton');
 function buildRuntime() {
   const runtimeConfig = createFirebaseRuntimeConfig({
     env: import.meta.env,
+    buildMode: import.meta.env.MODE,
     browserOrigin: globalThis.location?.origin,
     injectedFirebaseConfig: globalThis.__firebase_config,
   });

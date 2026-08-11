@@ -1,6 +1,14 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  B4A_BROWSER_BUILD_ATTESTATION,
+  readB4ABrowserBuildAttestation,
+  validateB4ABrowserBuildAttestation,
+  writeB4ABrowserBuildAttestation,
+} from '../scripts/b4aBrowserPreviewAttestation.js';
 import { buildB4ABrowserPreviewBlueprint } from '../scripts/b4aBrowserPreviewData.js';
 import {
   B4A_BROWSER_ADMIN_UID,
@@ -8,14 +16,132 @@ import {
   B4A_BROWSER_PROJECT_ID,
   B4A_BROWSER_SECRET_FILE_CONTENT,
   assertBrowserPreviewEnvironment,
+  assertBrowserPreviewViteEnvironment,
   browserPreviewEnvironment,
+  browserPreviewViteEnvironment,
 } from '../scripts/b4aBrowserPreviewConfig.js';
+
+function withTemporaryAttestation(contents, callback) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b4a-build-attestation-'));
+  const file = path.join(directory, 'b4a-emulator-build.json');
+  try {
+    if (contents !== undefined) fs.writeFileSync(file, contents);
+    return callback(file);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 test('canonical preview environment uses one demo project and three fixed loopback emulators', () => {
   const env = browserPreviewEnvironment({});
   assert.equal(assertBrowserPreviewEnvironment(env), true);
   assert.equal(env.GCLOUD_PROJECT, B4A_BROWSER_PROJECT_ID);
   assert.equal(JSON.parse(env.FIREBASE_CONFIG).projectId, B4A_BROWSER_PROJECT_ID);
+});
+
+test('canonical Vite environment overrides an inherited production runtime', () => {
+  const env = browserPreviewViteEnvironment({
+    UNRELATED_VALUE: 'preserved',
+    VITE_FIREBASE_RUNTIME: 'production',
+    VITE_FIREBASE_ADMIN_UIDS: 'production-admin',
+  });
+  assert.equal(assertBrowserPreviewViteEnvironment(env), true);
+  assert.equal(env.UNRELATED_VALUE, 'preserved');
+  assert.equal(env.VITE_FIREBASE_RUNTIME, 'emulator');
+  assert.equal(env.VITE_FIREBASE_ADMIN_UIDS, B4A_BROWSER_ADMIN_UID);
+});
+
+test('canonical Vite environment overrides inherited production project IDs', () => {
+  const env = browserPreviewViteEnvironment({
+    VITE_FIREBASE_PROJECT_ID: 'kaijuzaocard-tournaments',
+    VITE_FIREBASE_CLI_PROJECT_ID: 'kaijuzaocard-tournaments',
+  });
+  assert.equal(env.VITE_FIREBASE_PROJECT_ID, B4A_BROWSER_PROJECT_ID);
+  assert.equal(env.VITE_FIREBASE_CLI_PROJECT_ID, B4A_BROWSER_PROJECT_ID);
+});
+
+for (const [service, hostName, portName, remoteHost, expectedPort] of [
+  ['Auth', 'VITE_FIREBASE_AUTH_EMULATOR_HOST', 'VITE_FIREBASE_AUTH_EMULATOR_PORT', 'identitytoolkit.googleapis.com', '9099'],
+  ['Firestore', 'VITE_FIREBASE_FIRESTORE_EMULATOR_HOST', 'VITE_FIREBASE_FIRESTORE_EMULATOR_PORT', 'firestore.googleapis.com', '8080'],
+  ['Functions', 'VITE_FIREBASE_FUNCTIONS_EMULATOR_HOST', 'VITE_FIREBASE_FUNCTIONS_EMULATOR_PORT', 'cloudfunctions.net', '5001'],
+]) {
+  test(`canonical Vite environment overrides an inherited remote ${service} endpoint`, () => {
+    const env = browserPreviewViteEnvironment({ [hostName]: remoteHost, [portName]: '443' });
+    assert.equal(env[hostName], '127.0.0.1');
+    assert.equal(env[portName], expectedPort);
+  });
+}
+
+test('canonical Vite environment removes inherited production Swiss and unknown Firebase values', () => {
+  const env = browserPreviewViteEnvironment({
+    VITE_SWISS_APP_URL: 'https://swiss-tournament-one.vercel.app',
+    VITE_SWISS_ALLOWED_ORIGINS: 'https://swiss-tournament-one.vercel.app',
+    VITE_FIREBASE_UNEXPECTED_CREDENTIAL: 'must-not-survive',
+  });
+  assert.equal(env.VITE_SWISS_APP_URL, '');
+  assert.equal(env.VITE_SWISS_ALLOWED_ORIGINS, '');
+  assert.equal(Object.hasOwn(env, 'VITE_FIREBASE_UNEXPECTED_CREDENTIAL'), false);
+  assert.equal(assertBrowserPreviewViteEnvironment(env), true);
+});
+
+test('build:emulator uses the dedicated fail-closed build wrapper', () => {
+  const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(
+    packageJson.scripts['build:emulator'],
+    'node scripts/withB4ABrowserPreviewEnv.js scripts/buildB4ABrowserFrontend.js',
+  );
+});
+
+test('build attestation has the exact safe canonical shape', () => {
+  const validated = validateB4ABrowserBuildAttestation({ ...B4A_BROWSER_BUILD_ATTESTATION });
+  assert.deepEqual(validated, B4A_BROWSER_BUILD_ATTESTATION);
+  assert.deepEqual(Object.keys(validated), [
+    'schemaVersion', 'mode', 'projectId', 'authEndpoint', 'firestoreEndpoint', 'functionsEndpoint',
+  ]);
+});
+
+test('public build attestation contains no secret, token, API key, or player data', () => {
+  assert.doesNotMatch(JSON.stringify(B4A_BROWSER_BUILD_ATTESTATION), /secret|token|apiKey|AIza|player/i);
+});
+
+test('attestation writer and start validator round trip the canonical document', () => {
+  withTemporaryAttestation(undefined, (file) => {
+    writeB4ABrowserBuildAttestation(file);
+    assert.deepEqual(readB4ABrowserBuildAttestation(file), B4A_BROWSER_BUILD_ATTESTATION);
+  });
+});
+
+test('start validator rejects a missing attestation', () => {
+  withTemporaryAttestation(undefined, (file) => {
+    assert.throws(() => readB4ABrowserBuildAttestation(file), /ATTESTATION_REQUIRED/);
+  });
+});
+
+test('start validator rejects invalid attestation JSON', () => {
+  withTemporaryAttestation('{not-json', (file) => {
+    assert.throws(() => readB4ABrowserBuildAttestation(file), /ATTESTATION_JSON_INVALID/);
+  });
+});
+
+test('start validator rejects an attestation with an extra field', () => {
+  assert.throws(
+    () => validateB4ABrowserBuildAttestation({ ...B4A_BROWSER_BUILD_ATTESTATION, extra: true }),
+    /ATTESTATION_SHAPE_INVALID/,
+  );
+});
+
+test('start validator rejects a production project attestation', () => {
+  const value = { ...B4A_BROWSER_BUILD_ATTESTATION, projectId: 'kaijuzaocard-tournaments' };
+  withTemporaryAttestation(JSON.stringify(value), (file) => {
+    assert.throws(() => readB4ABrowserBuildAttestation(file), /PROJECTID_INVALID/);
+  });
+});
+
+test('start validator rejects a remote endpoint attestation', () => {
+  const value = { ...B4A_BROWSER_BUILD_ATTESTATION, authEndpoint: 'https://identitytoolkit.googleapis.com' };
+  withTemporaryAttestation(JSON.stringify(value), (file) => {
+    assert.throws(() => readB4ABrowserBuildAttestation(file), /AUTHENDPOINT_INVALID/);
+  });
 });
 
 test('seed safety rejects a production project ID', () => {

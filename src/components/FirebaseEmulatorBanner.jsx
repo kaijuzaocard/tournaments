@@ -5,6 +5,7 @@ export default function FirebaseEmulatorBanner() {
   return (
     <aside
       data-testid="firebase-emulator-banner"
+      data-runtime-evidence={JSON.stringify(firebaseRuntimeInfo)}
       className="bg-slate-950 px-4 py-3 text-white shadow-lg"
       aria-label="Local Firebase emulator preview"
     >
