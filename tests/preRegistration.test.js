@@ -5,6 +5,8 @@ import {
   buildManagementUrl,
   classifyPreRegistrationAvailability,
   deriveWaitlistRanks,
+  extractCallableErrorCode,
+  extractCallableErrorDetails,
   formatTaipeiDateTimeLocal,
   normalizeCustomerFields,
   normalizePreRegistrationSettings,
@@ -13,6 +15,7 @@ import {
   preparePreRegistrationForWrite,
   registrationStatusLabel,
   removePreRegistrationSecrets,
+  validatePreRegistrationSettings,
 } from '../src/utils/preRegistration.js';
 import { captureManagementRoute } from '../src/utils/managementTokenBootstrap.js';
 
@@ -46,7 +49,12 @@ test('Taipei deadline input round trips independently from browser timezone', ()
 });
 
 test('public availability distinguishes open, deadline, full, closed, and ended', () => {
-  const settings = { schemaVersion: 1, enabled: true, capacity: 2, deadline: new Date('2030-08-01T18:00:00+08:00') };
+  const settings = {
+    schemaVersion: 1,
+    enabled: true,
+    capacity: 2,
+    deadline: { toMillis: () => Date.parse('2030-08-01T18:00:00+08:00') },
+  };
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 1, Date.parse('2030-01-01')).status, 'open');
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 2, Date.parse('2030-01-01')).status, 'full');
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 0, Date.parse('2030-08-01T18:30:00+08:00')).status, 'deadline');
@@ -71,6 +79,36 @@ test('legacy v1 events default waitlist off while v2 requires explicit opt-in', 
   assert.deepEqual(normalizePreRegistrationStats({ activeCount: 0, waitlistedCount: 0 }), { activeCount: 0, waitlistedCount: 0 });
 });
 
+test('frontend settings reader accepts missing-version legacy and safely disables invalid v2 waitlist flags', () => {
+  const legacy = validatePreRegistrationSettings({ enabled: true, capacity: 8, deadline: null });
+  assert.equal(legacy.ok, true);
+  assert.equal(legacy.value.schemaVersion, 1);
+  assert.equal(legacy.value.waitlistEnabled, false);
+  for (const waitlistEnabled of [undefined, null, false, 'true', 1, {}, []]) {
+    const config = { schemaVersion: 2, enabled: true, capacity: 8, deadline: null };
+    if (waitlistEnabled !== undefined) config.waitlistEnabled = waitlistEnabled;
+    const result = validatePreRegistrationSettings(config);
+    assert.equal(result.ok, true);
+    assert.equal(result.value.waitlistEnabled, false);
+  }
+  assert.equal(validatePreRegistrationSettings({ enabled: true, capacity: 8, deadline: null, extra: true }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 3, enabled: true, capacity: 8, deadline: null }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 2, enabled: true, capacity: 0, deadline: null }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 2, enabled: true, capacity: '8', deadline: null }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 2, enabled: true, capacity: 8, deadline: {} }).ok, false);
+});
+
+test('callable error helpers allowlist structured full details without stringifying objects', () => {
+  const safe = { details: { code: 'PRE_REGISTRATION_FULL', waitlistAvailable: true } };
+  assert.equal(extractCallableErrorCode(safe), 'PRE_REGISTRATION_FULL');
+  assert.deepEqual(extractCallableErrorDetails(safe), {
+    code: 'PRE_REGISTRATION_FULL', waitlistAvailable: true,
+  });
+  assert.equal(extractCallableErrorDetails({ details: { code: 'INTERNAL_ERROR', secret: 'no' } }), null);
+  assert.equal(extractCallableErrorCode({ details: { arbitrary: true }, message: { unsafe: true } }), 'UNKNOWN_ERROR');
+  assert.equal(extractCallableErrorCode({ message: 'PRE_REGISTRATION_FULL' }), 'PRE_REGISTRATION_FULL');
+});
+
 test('management and admin presentation preserve all statuses and derive rank without mutation', () => {
   const entries = [
     removePreRegistrationSecrets({ registrationId: 'later', status: 'waitlisted', waitlistSequence: 9 }),
@@ -83,6 +121,16 @@ test('management and admin presentation preserve all statuses and derive rank wi
   assert.equal(registrationStatusLabel('waitlisted', 2), '候補 · 目前候補第 2 位');
   assert.equal(registrationStatusLabel('cancelled'), '已取消');
   assert.equal(entries[0].waitlistSequence, 9);
+  assert.deepEqual(deriveWaitlistRanks([
+    ...entries,
+    removePreRegistrationSecrets({ registrationId: 'broken', status: 'waitlisted', waitlistSequence: null }),
+  ]), {});
+  assert.deepEqual(deriveWaitlistRanks([
+    removePreRegistrationSecrets({ registrationId: 'duplicate-a', status: 'waitlisted', waitlistSequence: 1 }),
+    removePreRegistrationSecrets({ registrationId: 'duplicate-b', status: 'waitlisted', waitlistSequence: 1 }),
+  ]), {});
+  assert.equal(registrationStatusLabel('waitlisted', null, 'unavailable'), '候補 · 順位暫時無法計算');
+  assert.equal(removePreRegistrationSecrets({ status: 'active' }).waitlistRankState, 'not_applicable');
 });
 
 test('customer fields trim values and reject control characters or oversized input', () => {
@@ -127,6 +175,9 @@ test('customer pre-registration code uses callables and never directly writes or
   const customerSection = component.slice(0, component.indexOf('export function PreRegistrationAdminDialog'));
   assert.match(customerSection, /httpsCallable/);
   assert.doesNotMatch(customerSection, /\baddDoc\b|\bgetDocs\b|\bsetDoc\b|\bupdateDoc\b|\bdeleteDoc\b/);
+  assert.match(customerSection, /同意改加入候補/);
+  assert.match(customerSection, /if \(consent\) payload\.allowWaitlist = true/);
+  assert.doesNotMatch(customerSection, /allowWaitlist:\s*false/);
 });
 
 test('admin entry listener is scoped to the open authorized modal and returns cleanup', () => {
@@ -134,6 +185,7 @@ test('admin entry listener is scoped to the open authorized modal and returns cl
   assert.match(component, /if \(!open \|\| !isAdmin \|\| !event\?\.id\) return undefined/);
   assert.match(component, /return unsubscribe/);
   assert.match(component, /option value="waitlisted">候補/);
+  assert.match(component, /順位資料異常/);
   assert.doesNotMatch(component, /promote|reorder|通知候補/iu);
 });
 

@@ -114,16 +114,21 @@ export function validateManagePayload(value) {
 export function classifyPreRegistrationConfig(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { status: 'disabled' };
   const keys = Object.keys(value).sort();
-  const isLegacy = value.schemaVersion === LEGACY_SCHEMA_VERSION;
-  const expected = isLegacy
-    ? ['capacity', 'deadline', 'enabled', 'schemaVersion']
+  const hasVersion = Object.hasOwn(value, 'schemaVersion');
+  const isLegacy = !hasVersion || value.schemaVersion === LEGACY_SCHEMA_VERSION;
+  const isCurrent = value.schemaVersion === SCHEMA_VERSION;
+  const allowed = isLegacy
+    ? (hasVersion ? ['capacity', 'deadline', 'enabled', 'schemaVersion'] : ['capacity', 'deadline', 'enabled'])
     : ['capacity', 'deadline', 'enabled', 'schemaVersion', 'waitlistEnabled'];
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+  const required = isCurrent
+    ? ['capacity', 'deadline', 'enabled', 'schemaVersion']
+    : allowed;
+  if ((!isLegacy && !isCurrent)
+    || required.some((key) => !Object.hasOwn(value, key))
+    || keys.some((key) => !allowed.includes(key))) {
     return { status: 'malformed' };
   }
-  if (![LEGACY_SCHEMA_VERSION, SCHEMA_VERSION].includes(value.schemaVersion)
-    || typeof value.enabled !== 'boolean'
-    || (!isLegacy && typeof value.waitlistEnabled !== 'boolean')) return { status: 'malformed' };
+  if (typeof value.enabled !== 'boolean') return { status: 'malformed' };
   if (!Number.isSafeInteger(value.capacity) || value.capacity < 1 || value.capacity > MAX_CAPACITY) {
     return { status: 'malformed' };
   }
@@ -146,10 +151,17 @@ export function eventStartMillis(event) {
 }
 
 export function normalizeIdentity(fields) {
-  const normalize = (value) => value.normalize('NFKC').trim().toUpperCase().replace(/\s+/g, '');
-  if (fields.officialId) return `official:${normalize(fields.officialId)}`;
-  if (fields.honorId) return `honor:${normalize(fields.honorId)}`;
-  return null;
+  return normalizeIdentities(fields)[0] ?? null;
+}
+
+export function normalizeIdentities(fields) {
+  const normalize = (value) => String(value || '').normalize('NFKC').trim().toUpperCase().replace(/\s+/g, '');
+  const officialId = normalize(fields?.officialId);
+  const honorId = normalize(fields?.honorId);
+  return [
+    ...(officialId ? [`official:${officialId}`] : []),
+    ...(honorId ? [`honor:${honorId}`] : []),
+  ];
 }
 
 export function isLiveRegistrationStatus(status) {
@@ -170,8 +182,15 @@ export function classifyRegistrationManagementPolicy(event, nowMillis) {
   return { state: 'open', canUpdate: true, canCancel: true };
 }
 
-export function publicRegistration(entry, policy = { state: 'open', canUpdate: true, canCancel: true }, waitlistRank = null) {
+export function publicRegistration(
+  entry,
+  policy = { state: 'open', canUpdate: true, canCancel: true },
+  rankResult = { state: 'not_applicable', rank: null },
+) {
   const live = isLiveRegistrationStatus(entry.status);
+  const waitlistRankState = entry.status === WAITLISTED_STATUS && rankResult?.state === 'available'
+    ? 'available'
+    : entry.status === WAITLISTED_STATUS ? 'unavailable' : 'not_applicable';
   return {
     schemaVersion: SCHEMA_VERSION,
     registrationId: entry.registrationId,
@@ -180,9 +199,11 @@ export function publicRegistration(entry, policy = { state: 'open', canUpdate: t
     deckName: entry.deckName,
     honorId: entry.honorId,
     status: entry.status,
-    waitlistRank: entry.status === WAITLISTED_STATUS && Number.isSafeInteger(waitlistRank) && waitlistRank > 0
-      ? waitlistRank
+    waitlistRank: waitlistRankState === 'available'
+      && Number.isSafeInteger(rankResult.rank) && rankResult.rank > 0
+      ? rankResult.rank
       : null,
+    waitlistRankState,
     createdAt: entry.createdAt?.toDate?.().toISOString?.() ?? null,
     updatedAt: entry.updatedAt?.toDate?.().toISOString?.() ?? null,
     cancelledAt: entry.cancelledAt?.toDate?.().toISOString?.() ?? null,

@@ -167,7 +167,10 @@ function callableError(error) {
     const diagnosticCode = safeCode || safeMessage || error?.name || 'UnknownError';
     console.error('Calendar pre-registration callable failed', { code, diagnosticCode });
   }
-  return new HttpsError(status, publicCode);
+  const details = error instanceof ServiceError && publicCode === error.code
+    ? error.publicDetails
+    : undefined;
+  return new HttpsError(status, publicCode, details);
 }
 
 export const submitTournamentPreRegistration = onCall(callableOptions, async (request) => {
@@ -179,6 +182,7 @@ export const submitTournamentPreRegistration = onCall(callableOptions, async (re
       managementToken: result.managementToken,
       status: result.status,
       waitlistRank: result.waitlistRank,
+      waitlistRankState: result.waitlistRankState,
       replayed: result.replayed,
     };
   } catch (error) {

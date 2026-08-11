@@ -4,7 +4,12 @@ import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { createPreRegistrationService } from '../src/service.js';
 import { createTournamentPreRegistrationHandoffService } from '../src/handoffService.js';
-import { deterministicCredentials, hmac, stableJson } from '../src/security.js';
+import {
+  deterministicCredentials,
+  hashManagementToken,
+  hmac,
+  stableJson,
+} from '../src/security.js';
 
 const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 const integrationTest = enabled ? test : test.skip;
@@ -77,15 +82,22 @@ const createHandoffPayload = (overrides = {}) => ({
   ...overrides,
 });
 
-async function callFunction(name, data) {
+async function callFunctionEnvelope(name, data) {
   const response = await fetch(`http://${FUNCTIONS_HOST}/${PROJECT_ID}/asia-east1/${name}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ data }),
   });
   const body = await response.json();
+  return { response, body };
+}
+
+async function callFunction(name, data) {
+  const { response, body } = await callFunctionEnvelope(name, data);
   if (!response.ok || body.error) {
-    throw new Error(body.error?.message || `CALLABLE_HTTP_${response.status}`);
+    const error = new Error(body.error?.message || `CALLABLE_HTTP_${response.status}`);
+    error.callable = body.error;
+    throw error;
   }
   return body.result;
 }
@@ -175,6 +187,66 @@ integrationTest('closed, expired, ended, and full events reject new entries', as
   await assert.rejects(service.submit(payload({ requestId: 'request-2' }), '192.0.2.3'), /PRE_REGISTRATION_DEADLINE_PASSED/);
   await seedEvent({ date: '2029-01-01', preRegistration: { schemaVersion: 1, enabled: true, capacity: 8, deadline: null } });
   await assert.rejects(service.submit(payload({ requestId: 'request-3' }), '192.0.2.3'), /EVENT_ENDED/);
+});
+
+const identityHash = (identity) => hmac(SECRET, 'identity', `event-1:${identity}`);
+
+integrationTest('full race returns structured consent details without mutating registration state', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'full-seat', officialId: '', playerName: 'Seat' }), '192.0.2.103');
+  const racePayload = payload({ requestId: 'full-race', officialId: '', playerName: 'Race' });
+  await assert.rejects(
+    service.submit(racePayload, '192.0.2.104'),
+    (error) => {
+      assert.equal(error.code, 'PRE_REGISTRATION_FULL');
+      assert.deepEqual(error.publicDetails, {
+        code: 'PRE_REGISTRATION_FULL', waitlistAvailable: true,
+      });
+      return true;
+    },
+  );
+  const operationId = hmac(SECRET, 'operation-id', racePayload.requestId);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/operations/${operationId}`).get()).exists, false);
+  assert.equal((await db.collection(`${PRIVATE_ROOT}/event-1/entries`).get()).size, 1);
+  let aggregate = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.deepEqual(
+    { activeCount: aggregate.activeCount, waitlistedCount: aggregate.waitlistedCount, nextWaitlistSequence: aggregate.nextWaitlistSequence },
+    { activeCount: 1, waitlistedCount: 0, nextWaitlistSequence: 1 },
+  );
+
+  const consented = await service.submit({ ...racePayload, allowWaitlist: true }, '192.0.2.104');
+  assert.equal(consented.status, 'waitlisted');
+  aggregate = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.deepEqual(
+    { activeCount: aggregate.activeCount, waitlistedCount: aggregate.waitlistedCount, nextWaitlistSequence: aggregate.nextWaitlistSequence },
+    { activeCount: 1, waitlistedCount: 1, nextWaitlistSequence: 2 },
+  );
+
+  await db.doc(`${EVENT_ROOT}/event-1`).update({ 'preRegistration.waitlistEnabled': false });
+  await assert.rejects(
+    service.submit(payload({ requestId: 'full-no-waitlist', officialId: '', playerName: 'No waitlist' }), '192.0.2.105'),
+    (error) => {
+      assert.deepEqual(error.publicDetails, {
+        code: 'PRE_REGISTRATION_FULL', waitlistAvailable: false,
+      });
+      return true;
+    },
+  );
+});
+
+integrationTest('deployed callable exposes only safe structured full details', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'callable-full-seat', officialId: '', playerName: 'Seat' }), '192.0.2.106');
+  const { response, body } = await callFunctionEnvelope(
+    'submitTournamentPreRegistration',
+    payload({ requestId: 'callable-full-race', officialId: '', playerName: 'Race' }),
+  );
+  assert.equal(response.ok, false);
+  assert.equal(body.error.message, 'PRE_REGISTRATION_FULL');
+  assert.deepEqual(body.error.details, {
+    code: 'PRE_REGISTRATION_FULL', waitlistAvailable: true,
+  });
+  assert.deepEqual(Object.keys(body.error.details).sort(), ['code', 'waitlistAvailable']);
 });
 
 integrationTest('C1 last active seat grants exactly one normal registration', async () => {
@@ -281,6 +353,132 @@ integrationTest('official and honor duplicates are blocked while player names ar
   await service.submit(payload({ requestId: 'name-only-2', officialId: '', honorId: '', playerName: 'Same' }), '192.0.2.11');
 });
 
+integrationTest('same Official is blocked even when Honor differs', async () => {
+  await seedEvent();
+  await service.submit(payload({ requestId: 'official-owner', officialId: 'shared-official', honorId: 'honor-a' }), '192.0.2.110');
+  await assert.rejects(
+    service.submit(payload({ requestId: 'official-conflict', officialId: ' SHARED-OFFICIAL ', honorId: 'honor-b' }), '192.0.2.111'),
+    /POSSIBLE_DUPLICATE_REGISTRATION/,
+  );
+});
+
+integrationTest('same Honor is blocked even when Official differs', async () => {
+  await seedEvent();
+  await service.submit(payload({ requestId: 'honor-owner', officialId: 'official-a', honorId: 'shared-honor' }), '192.0.2.112');
+  await assert.rejects(
+    service.submit(payload({ requestId: 'honor-conflict', officialId: 'official-b', honorId: ' SHARED-HONOR ' }), '192.0.2.113'),
+    /POSSIBLE_DUPLICATE_REGISTRATION/,
+  );
+});
+
+integrationTest('multi-identity locks block active-to-waitlisted and waitlisted-to-waitlisted duplicates', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'multi-active', officialId: 'active-official', honorId: 'active-honor' }), '192.0.2.114');
+  await assert.rejects(
+    service.submit(payload({ requestId: 'active-official-wait', officialId: 'ACTIVE-OFFICIAL', honorId: 'other-honor', allowWaitlist: true }), '192.0.2.115'),
+    /POSSIBLE_DUPLICATE_REGISTRATION/,
+  );
+  await assert.rejects(
+    service.submit(payload({ requestId: 'active-honor-wait', officialId: 'other-official', honorId: 'ACTIVE-HONOR', allowWaitlist: true }), '192.0.2.116'),
+    /POSSIBLE_DUPLICATE_REGISTRATION/,
+  );
+  await service.submit(payload({ requestId: 'wait-owner', officialId: 'wait-official', honorId: 'wait-honor', allowWaitlist: true }), '192.0.2.117');
+  await assert.rejects(
+    service.submit(payload({ requestId: 'wait-conflict', officialId: 'new-official', honorId: 'WAIT-HONOR', allowWaitlist: true }), '192.0.2.118'),
+    /POSSIBLE_DUPLICATE_REGISTRATION/,
+  );
+});
+
+integrationTest('cancellation releases both Official and Honor locks for reuse', async () => {
+  await seedEvent();
+  const first = await service.submit(payload({ requestId: 'release-both', officialId: 'release-official', honorId: 'release-honor' }), '192.0.2.119');
+  await service.manage({
+    action: 'cancel', calendarEventId: 'event-1', registrationId: first.registrationId, managementToken: first.managementToken,
+  }, '192.0.2.120');
+  const replacement = await service.submit(payload({ requestId: 'reuse-both', officialId: 'RELEASE OFFICIAL', honorId: 'RELEASE HONOR' }), '192.0.2.121');
+  assert.equal(replacement.status, 'active');
+  const locks = await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get();
+  assert.equal(locks.size, 2);
+  assert.ok(locks.docs.every((document) => document.data().registrationId === replacement.registrationId));
+});
+
+integrationTest('update adding an occupied Honor rolls back the entry and every lock', async () => {
+  await seedEvent();
+  const first = await service.submit(payload({ requestId: 'update-first', officialId: 'first-official', honorId: '' }), '192.0.2.122');
+  const second = await service.submit(payload({ requestId: 'update-second', officialId: 'second-official', honorId: 'occupied-honor' }), '192.0.2.123');
+  const base = { calendarEventId: 'event-1', registrationId: first.registrationId, managementToken: first.managementToken };
+  await assert.rejects(service.manage({
+    action: 'update', ...base, playerName: 'Changed', officialId: 'first-official', deckName: 'Changed', honorId: 'OCCUPIED-HONOR',
+  }, '192.0.2.124'), /POSSIBLE_DUPLICATE_REGISTRATION/);
+  const entry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${first.registrationId}`).get()).data();
+  assert.equal(entry.playerName, 'Player');
+  assert.equal(entry.honorId, '');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('honor:OCCUPIED-HONOR')}`).get()).data().registrationId, second.registrationId);
+  assert.equal((await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get()).size, 3);
+});
+
+integrationTest('update changes Official while retaining the owned Honor lock', async () => {
+  await seedEvent();
+  const created = await service.submit(payload({ requestId: 'change-official', officialId: 'old-official', honorId: 'keep-honor' }), '192.0.2.125');
+  const base = { calendarEventId: 'event-1', registrationId: created.registrationId, managementToken: created.managementToken };
+  await service.manage({
+    action: 'update', ...base, playerName: 'Player', officialId: 'new-official', deckName: 'Deck', honorId: 'keep-honor',
+  }, '192.0.2.126');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('official:OLD-OFFICIAL')}`).get()).exists, false);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('official:NEW-OFFICIAL')}`).get()).data().registrationId, created.registrationId);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('honor:KEEP-HONOR')}`).get()).data().registrationId, created.registrationId);
+  const entry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${created.registrationId}`).get()).data();
+  assert.deepEqual(new Set(entry.identityHashes), new Set([
+    identityHash('official:NEW-OFFICIAL'), identityHash('honor:KEEP-HONOR'),
+  ]));
+});
+
+integrationTest('legacy primary-only entry blocks secondary Honor duplicates and can cancel safely', async () => {
+  await seedEvent();
+  const registrationId = 'reg-legacy-identities';
+  const managementToken = 'L'.repeat(43);
+  const officialHash = identityHash('official:LEGACY-OFFICIAL');
+  await db.doc(`${PRIVATE_ROOT}/event-1`).set({ schemaVersion: 1, activeCount: 1 });
+  await db.doc(`${PRIVATE_ROOT}/event-1/entries/${registrationId}`).set({
+    schemaVersion: 1,
+    registrationId,
+    calendarEventId: 'event-1',
+    playerName: 'Legacy',
+    officialId: 'legacy-official',
+    honorId: 'legacy-honor',
+    deckName: '',
+    status: 'active',
+    tokenHash: hashManagementToken(SECRET, managementToken),
+    identityHash: officialHash,
+    createdAt: Timestamp.fromMillis(clock - 2),
+    updatedAt: Timestamp.fromMillis(clock - 1),
+  });
+  await db.doc(`${PRIVATE_ROOT}/event-1/identities/${officialHash}`).set({
+    schemaVersion: 1, registrationId, status: 'active', updatedAt: Timestamp.fromMillis(clock - 1),
+  });
+  await assert.rejects(
+    service.submit(payload({ requestId: 'legacy-secondary-conflict', officialId: 'new-official', honorId: ' LEGACY-HONOR ' }), '192.0.2.127'),
+    /POSSIBLE_DUPLICATE_REGISTRATION/,
+  );
+  const cancelled = await service.manage({
+    action: 'cancel', calendarEventId: 'event-1', registrationId, managementToken,
+  }, '192.0.2.128');
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${officialHash}`).get()).exists, false);
+});
+
+integrationTest('exact replay creates no additional Official or Honor lock', async () => {
+  await seedEvent();
+  const request = payload({ requestId: 'identity-replay', officialId: 'replay-official', honorId: 'replay-honor' });
+  const first = await service.submit(request, '192.0.2.129');
+  const replay = await service.submit(request, '192.0.2.129');
+  assert.equal(replay.registrationId, first.registrationId);
+  assert.equal(replay.replayed, true);
+  const locks = await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get();
+  assert.equal(locks.size, 2);
+  assert.ok(locks.docs.every((document) => document.data().registrationId === first.registrationId));
+});
+
 integrationTest('correct token can get and update only customer fields; incorrect token is ambiguous', async () => {
   await seedEvent();
   const created = await service.submit(payload(), '192.0.2.12');
@@ -335,6 +533,55 @@ integrationTest('waitlisted management returns server rank, excludes cancelled e
   await service.manage({ action: 'cancel', ...firstBase }, '192.0.2.84');
   assert.equal((await service.manage({ action: 'get', ...secondBase }, '192.0.2.83')).waitlistRank, 1);
   assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/entries/${second.registrationId}`).get()).data().waitlistSequence, 2);
+});
+
+integrationTest('normal waitlist rank remains canonical for positions 1, 2, and 3', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'rank3-seat', officialId: '', playerName: 'Seat' }), '192.0.2.130');
+  const waiting = [];
+  for (let index = 1; index <= 3; index += 1) {
+    waiting.push(await service.submit(payload({
+      requestId: `rank3-${index}`, officialId: '', playerName: `Wait ${index}`, allowWaitlist: true,
+    }), `192.0.2.${130 + index}`));
+  }
+  for (let index = 0; index < waiting.length; index += 1) {
+    const item = waiting[index];
+    const found = await service.manage({
+      action: 'get', calendarEventId: 'event-1', registrationId: item.registrationId, managementToken: item.managementToken,
+    }, `192.0.2.${140 + index}`);
+    assert.equal(found.waitlistRankState, 'available');
+    assert.equal(found.waitlistRank, index + 1);
+  }
+});
+
+integrationTest('malformed waitlist sequence never crashes another or its own manage response', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'rank-broken-seat', officialId: '', playerName: 'Seat' }), '192.0.2.144');
+  const broken = await service.submit(payload({ requestId: 'rank-broken', officialId: '', playerName: 'Broken', allowWaitlist: true }), '192.0.2.145');
+  const healthy = await service.submit(payload({ requestId: 'rank-healthy', officialId: '', playerName: 'Healthy', allowWaitlist: true }), '192.0.2.146');
+  await db.doc(`${PRIVATE_ROOT}/event-1/entries/${broken.registrationId}`).update({ waitlistSequence: null });
+  for (const [item, ip] of [[healthy, '192.0.2.147'], [broken, '192.0.2.148']]) {
+    const found = await service.manage({
+      action: 'get', calendarEventId: 'event-1', registrationId: item.registrationId, managementToken: item.managementToken,
+    }, ip);
+    assert.equal(found.status, 'waitlisted');
+    assert.equal(found.waitlistRank, null);
+    assert.equal(found.waitlistRankState, 'unavailable');
+  }
+});
+
+integrationTest('duplicate live waitlist sequence returns unavailable instead of guessing rank', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'rank-dup-seat', officialId: '', playerName: 'Seat' }), '192.0.2.149');
+  const first = await service.submit(payload({ requestId: 'rank-dup-first', officialId: '', playerName: 'First', allowWaitlist: true }), '192.0.2.150');
+  const second = await service.submit(payload({ requestId: 'rank-dup-second', officialId: '', playerName: 'Second', allowWaitlist: true }), '192.0.2.151');
+  await db.doc(`${PRIVATE_ROOT}/event-1/entries/${first.registrationId}`).update({ waitlistSequence: 2 });
+  const found = await service.manage({
+    action: 'get', calendarEventId: 'event-1', registrationId: second.registrationId, managementToken: second.managementToken,
+  }, '192.0.2.152');
+  assert.equal(found.status, 'waitlisted');
+  assert.equal(found.waitlistRank, null);
+  assert.equal(found.waitlistRankState, 'unavailable');
 });
 
 integrationTest('active cancellation never auto-promotes an existing waitlisted entry', async () => {
@@ -495,7 +742,7 @@ integrationTest('B2B request replay rejects a changed selection and entry eligib
 
   await db.doc(`${PRIVATE_ROOT}/event-1/entries/reg-2`).update({ status: 'cancelled' });
   await assert.rejects(handoffService.create(createHandoffPayload({ requestId: 'handoff-request-2' })), /REGISTRATION_NOT_ACTIVE/);
-  await db.doc(`${PRIVATE_ROOT}/event-1/entries/reg-2`).update({ status: 'waitlisted', waitlistSequence: 1 });
+  await db.doc(`${PRIVATE_ROOT}/event-1/entries/reg-2`).update({ status: 'waitlisted', waitlistSequence: null });
   await assert.rejects(handoffService.create(createHandoffPayload({ requestId: 'handoff-request-waitlisted' })), /REGISTRATION_NOT_ACTIVE/);
   await db.doc(`${PRIVATE_ROOT}/event-1/entries/reg-2`).update({ status: 'active', importedTournamentId: 'tournament-other' });
   await assert.rejects(handoffService.create(createHandoffPayload({ requestId: 'handoff-request-3' })), /REGISTRATION_IMPORT_CONFLICT/);

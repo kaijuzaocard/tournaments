@@ -7,6 +7,8 @@ import {
   buildManagementUrl,
   createRequestId,
   deriveWaitlistRanks,
+  extractCallableErrorCode,
+  extractCallableErrorDetails,
   normalizeCustomerFields,
   registrationStatusLabel,
   removePreRegistrationSecrets,
@@ -25,8 +27,7 @@ import PreRegistrationSwissImportControls from './PreRegistrationSwissImportCont
 const EMPTY_FORM = Object.freeze({ playerName: '', officialId: '', deckName: '', honorId: '' });
 
 function errorMessage(error) {
-  const raw = error?.details || error?.message || error?.code || 'UNKNOWN_ERROR';
-  const code = String(raw).split('/').pop();
+  const code = extractCallableErrorCode(error);
   const messages = {
     PRE_REGISTRATION_CLOSED: '本場預報名目前未開放。',
     PRE_REGISTRATION_DEADLINE_PASSED: '本場預報名已截止。',
@@ -81,7 +82,7 @@ export function PreRegistrationPanel({ event, stats, activeCount = 0, waitlisted
           )}
         </div>
         {availability.status === 'open' ? (
-          <button type="button" onClick={(clickEvent) => { clickEvent.stopPropagation(); onRegister({ event, allowWaitlist: false }); }} className="px-4 py-2 bg-emerald-600 text-white text-sm font-black rounded-lg hover:bg-emerald-700 active:scale-95">
+          <button type="button" onClick={(clickEvent) => { clickEvent.stopPropagation(); onRegister({ event }); }} className="px-4 py-2 bg-emerald-600 text-white text-sm font-black rounded-lg hover:bg-emerald-700 active:scale-95">
             預先報名
           </button>
         ) : availability.status === 'waitlist' ? (
@@ -106,26 +107,31 @@ export function PreRegistrationDialog({ event, allowWaitlist = false, functions,
   const [registrationId, setRegistrationId] = useState('');
   const [registrationStatus, setRegistrationStatus] = useState('');
   const [waitlistRank, setWaitlistRank] = useState(null);
+  const [waitlistRankState, setWaitlistRankState] = useState('not_applicable');
   const [linkCopied, setLinkCopied] = useState(false);
+  const [waitlistConsent, setWaitlistConsent] = useState(allowWaitlist === true);
+  const [waitlistOffer, setWaitlistOffer] = useState(false);
   const requestIdRef = useRef(createRequestId());
 
-  const submit = async (submitEvent) => {
-    submitEvent.preventDefault();
+  const submitWithConsent = async (consent) => {
     if (submitting) return;
     setSubmitting(true);
     setError('');
+    setWaitlistOffer(false);
     try {
       const fields = normalizeCustomerFields(form);
       const callable = httpsCallable(functions, 'submitTournamentPreRegistration');
-      const response = await callable({
+      const payload = {
         requestId: requestIdRef.current,
         calendarEventId: event.id,
-        allowWaitlist,
         ...fields,
-      });
+      };
+      if (consent) payload.allowWaitlist = true;
+      const response = await callable(payload);
       setRegistrationId(response.data.registrationId);
       setRegistrationStatus(response.data.status);
       setWaitlistRank(response.data.waitlistRank);
+      setWaitlistRankState(response.data.waitlistRankState);
       storeGeneratedManagementUrl(buildManagementUrl({
         origin: window.location.origin,
         calendarEventId: event.id,
@@ -133,10 +139,28 @@ export function PreRegistrationDialog({ event, allowWaitlist = false, functions,
         managementToken: response.data.managementToken,
       }));
     } catch (submitError) {
-      setError(errorMessage(submitError));
+      const details = extractCallableErrorDetails(submitError);
+      if (!consent
+        && extractCallableErrorCode(submitError) === 'PRE_REGISTRATION_FULL'
+        && details?.waitlistAvailable === true) {
+        setError('正取席位剛剛額滿；你可以保留目前資料並明確同意改加入候補。');
+        setWaitlistOffer(true);
+      } else {
+        setError(errorMessage(submitError));
+      }
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const submit = (submitEvent) => {
+    submitEvent.preventDefault();
+    void submitWithConsent(waitlistConsent);
+  };
+
+  const acceptWaitlistOffer = () => {
+    setWaitlistConsent(true);
+    void submitWithConsent(true);
   };
 
   const copyManagementUrl = async () => {
@@ -157,26 +181,27 @@ export function PreRegistrationDialog({ event, allowWaitlist = false, functions,
     <div className="fixed inset-0 z-[100] bg-black/55 p-4 flex items-center justify-center" role="dialog" aria-modal="true">
       <div className="w-full max-w-lg bg-white border border-gray-200 rounded-lg shadow-2xl p-6">
         <div className="flex items-start justify-between gap-4 mb-5">
-          <div><h2 className="text-xl font-black text-gray-900">{registrationId ? (registrationStatus === 'waitlisted' ? '加入候補成功' : '報名成功') : (allowWaitlist ? '加入賽事候補' : '賽事預報名')}</h2><p className="text-sm font-bold text-gray-500 mt-1">{event.title}</p></div>
+          <div><h2 className="text-xl font-black text-gray-900">{registrationId ? (registrationStatus === 'waitlisted' ? '加入候補成功' : '報名成功') : (waitlistConsent ? '加入賽事候補' : '賽事預報名')}</h2><p className="text-sm font-bold text-gray-500 mt-1">{event.title}</p></div>
           <button type="button" onClick={close} title="關閉" className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
         </div>
         {registrationId ? (
           <div className="space-y-4">
-            <div className={`flex items-center gap-3 p-4 rounded-lg border ${registrationStatus === 'waitlisted' ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}><CheckCircle2 className={`w-6 h-6 ${registrationStatus === 'waitlisted' ? 'text-amber-600' : 'text-emerald-600'}`} /><div><p className={`font-black ${registrationStatus === 'waitlisted' ? 'text-amber-900' : 'text-emerald-900'}`}>{registrationStatus === 'waitlisted' ? `已加入候補${waitlistRank ? `，目前第 ${waitlistRank} 位` : ''}` : '已取得正取席位'}</p><p className={`text-sm font-bold ${registrationStatus === 'waitlisted' ? 'text-amber-700' : 'text-emerald-700'}`}>編號：{shortenRegistrationId(registrationId)}</p></div></div>
+            <div className={`flex items-center gap-3 p-4 rounded-lg border ${registrationStatus === 'waitlisted' ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}><CheckCircle2 className={`w-6 h-6 ${registrationStatus === 'waitlisted' ? 'text-amber-600' : 'text-emerald-600'}`} /><div><p className={`font-black ${registrationStatus === 'waitlisted' ? 'text-amber-900' : 'text-emerald-900'}`}>{registrationStatus === 'waitlisted' ? (waitlistRankState === 'unavailable' ? '已加入候補，順位暫時無法計算' : `已加入候補${waitlistRank ? `，目前第 ${waitlistRank} 位` : ''}`) : '已取得正取席位'}</p><p className={`text-sm font-bold ${registrationStatus === 'waitlisted' ? 'text-amber-700' : 'text-emerald-700'}`}>編號：{shortenRegistrationId(registrationId)}</p></div></div>
             <p className="text-sm text-gray-600 font-bold">管理連結可用來查看、修改或取消這筆報名。請立即保存，系統不會把管理憑證留在瀏覽器儲存空間。</p>
             {error && <p role="alert" className="text-sm font-bold text-rose-700">{error}</p>}
             <button type="button" disabled={linkCopied} onClick={copyManagementUrl} className="w-full py-3 bg-gray-900 text-white font-black rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"><Clipboard className="w-4 h-4" /> {linkCopied ? '管理連結已複製並從頁面記憶體清除' : '複製管理連結'}</button>
           </div>
         ) : (
           <form onSubmit={submit} className="space-y-4">
-            {allowWaitlist && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">正取目前已額滿。送出後由伺服器再次確認席位；若仍額滿才會加入候補。本階段不會自動補位。</p>}
+            {waitlistConsent && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">正取目前已額滿。送出後由伺服器再次確認席位；若已有空位會取得正取，若仍額滿才會加入候補。本階段不會自動補位。</p>}
             <label className="block text-sm font-black text-gray-700">玩家名稱<input required maxLength={40} value={form.playerName} onChange={(e) => setForm({ ...form, playerName: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <label className="block text-sm font-black text-gray-700">官方玩家 ID（選填）<input maxLength={40} value={form.officialId} onChange={(e) => setForm({ ...form, officialId: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <label className="block text-sm font-black text-gray-700">使用牌組（選填）<input maxLength={80} value={form.deckName} onChange={(e) => setForm({ ...form, deckName: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <label className="block text-sm font-black text-gray-700">榮耀 ID（選填）<input maxLength={40} value={form.honorId} onChange={(e) => setForm({ ...form, honorId: e.target.value })} className="mt-1 w-full p-3 border border-gray-300 rounded-lg" /></label>
             <p className="text-xs leading-relaxed text-gray-500">以上資料僅用於本場賽事辨識、名單管理與後續報到；不蒐集電話、Email 或付款資料。</p>
             {error && <p role="alert" className="text-sm font-bold text-rose-700">{error}</p>}
-            <button disabled={submitting} className={`w-full py-3 text-white font-black rounded-lg disabled:opacity-60 ${allowWaitlist ? 'bg-amber-600' : 'bg-emerald-600'}`}>{submitting ? '送出中……' : allowWaitlist ? '確認加入候補' : '送出預報名'}</button>
+            {waitlistOffer && <button type="button" disabled={submitting} onClick={acceptWaitlistOffer} className="w-full py-3 bg-amber-600 text-white font-black rounded-lg disabled:opacity-60">同意改加入候補</button>}
+            {!waitlistOffer && <button disabled={submitting} className={`w-full py-3 text-white font-black rounded-lg disabled:opacity-60 ${waitlistConsent ? 'bg-amber-600' : 'bg-emerald-600'}`}>{submitting ? '送出中……' : waitlistConsent ? '確認加入候補' : '送出預報名'}</button>}
           </form>
         )}
       </div>
@@ -248,8 +273,8 @@ export function RegistrationManagementDialog({ functions, onClose }) {
         <div className="flex items-center justify-between mb-5"><h2 className="text-xl font-black text-gray-900">管理我的預報名</h2><button type="button" onClick={close} title="關閉" className="p-2 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button></div>
         {loading ? <p className="font-bold text-gray-500">正在安全讀取報名資料……</p> : error && !entry ? <p role="alert" className="font-bold text-rose-700">{error}</p> : entry && (
           <div className="space-y-4">
-            <p className="text-sm font-bold text-gray-500">報名編號：{shortenRegistrationId(entry.registrationId)} · {registrationStatusLabel(entry.status, entry.waitlistRank)}</p>
-            {entry.status === 'waitlisted' && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">候補席位不會在本階段自動轉為正取；請用此管理連結查看最新順位。</p>}
+            <p className="text-sm font-bold text-gray-500">報名編號：{shortenRegistrationId(entry.registrationId)} · {registrationStatusLabel(entry.status, entry.waitlistRank, entry.waitlistRankState)}</p>
+            {entry.status === 'waitlisted' && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">{entry.waitlistRankState === 'unavailable' ? '候補順位資料目前無法完整驗證，請稍後再用此管理連結查看。' : '候補席位不會在本階段自動轉為正取；請用此管理連結查看最新順位。'}</p>}
             {entry.managementState === 'event_started' && <p className="text-sm font-bold text-amber-700">活動已開始或結束，目前僅提供報名摘要查閱。</p>}
             {entry.managementState === 'deadline_passed' && <p className="text-sm font-bold text-amber-700">修改期限已截止；活動開始前仍可取消報名。</p>}
             {entry.managementState === 'closed' && <p className="text-sm font-bold text-amber-700">主辦方已關閉新報名與資料修改；活動開始前仍可取消。</p>}
@@ -290,6 +315,9 @@ export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, fu
   if (!open || !event) return null;
   const needle = search.trim().toLocaleLowerCase('zh-TW');
   const waitlistRanks = deriveWaitlistRanks(entries);
+  const waitlistSequenceCounts = entries
+    .filter((entry) => entry.status === 'waitlisted' && Number.isSafeInteger(entry.waitlistSequence) && entry.waitlistSequence > 0)
+    .reduce((counts, entry) => counts.set(entry.waitlistSequence, (counts.get(entry.waitlistSequence) || 0) + 1), new Map());
   const visible = entries.filter((entry) => (filter === 'all' || entry.status === filter)
     && (!needle || [entry.playerName, entry.officialId, entry.deckName, entry.honorId, entry.registrationId]
       .some((value) => String(value || '').toLocaleLowerCase('zh-TW').includes(needle))))
@@ -308,7 +336,7 @@ export function PreRegistrationAdminDialog({ open, event, isAdmin, db, appId, fu
         {error ? <p role="alert" className="font-bold text-rose-700">{error}</p> : visible.length === 0 ? <p className="font-bold text-gray-400 py-10 text-center">沒有符合條件的預報名</p> : (
           <div className="divide-y border rounded-lg overflow-hidden">{visible.map((entry) => (
             <div key={entry.registrationId} className="p-4 grid grid-cols-1 md:grid-cols-7 gap-2 text-sm">
-              <span className="font-black">{entry.playerName}</span><span>{entry.officialId || '無官方 ID'}</span><span>{entry.deckName || '未填牌組'}</span><span>{entry.honorId || '無榮耀 ID'}</span><span className="font-mono">{shortenRegistrationId(entry.registrationId)}</span><span>{entry.createdAt ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(entry.createdAt?.toMillis?.() ?? entry.createdAt)) : '時間待同步'}</span><span className={entry.status === 'active' ? 'text-emerald-700 font-black' : entry.status === 'waitlisted' ? 'text-amber-700 font-black' : 'text-gray-500 font-black'}>{registrationStatusLabel(entry.status, waitlistRanks[entry.registrationId])}</span>
+              <span className="font-black">{entry.playerName}</span><span>{entry.officialId || '無官方 ID'}</span><span>{entry.deckName || '未填牌組'}</span><span>{entry.honorId || '無榮耀 ID'}</span><span className="font-mono">{shortenRegistrationId(entry.registrationId)}</span><span>{entry.createdAt ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(entry.createdAt?.toMillis?.() ?? entry.createdAt)) : '時間待同步'}</span><span className={entry.status === 'active' ? 'text-emerald-700 font-black' : entry.status === 'waitlisted' ? 'text-amber-700 font-black' : 'text-gray-500 font-black'}>{entry.status === 'waitlisted' && (!Number.isSafeInteger(entry.waitlistSequence) || entry.waitlistSequence < 1 || waitlistSequenceCounts.get(entry.waitlistSequence) > 1) ? '候補 · 順位資料異常' : registrationStatusLabel(entry.status, waitlistRanks[entry.registrationId], entry.status === 'waitlisted' && !waitlistRanks[entry.registrationId] ? 'unavailable' : 'available')}</span>
             </div>
           ))}</div>
         )}

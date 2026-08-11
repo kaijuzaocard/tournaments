@@ -6,6 +6,7 @@ import {
   classifyPreRegistrationConfig,
   classifyRegistrationManagementPolicy,
   normalizeIdentity,
+  normalizeIdentities,
   publicRegistration,
   validateManagePayload,
   validateSubmitPayload,
@@ -58,10 +59,15 @@ test('management actions use strict action-specific fields', () => {
   assert.throws(() => validateManagePayload({ ...base, action: 'update' }), /UNKNOWN_OR_MISSING_FIELDS/);
 });
 
-test('identity normalization prioritizes official ID and never uses player name', () => {
+test('identity normalization keeps a legacy primary while exposing every canonical identity', () => {
   assert.equal(normalizeIdentity({ officialId: ' ptcg 123 ', honorId: 'H1', playerName: 'Same' }), 'official:PTCG123');
+  assert.deepEqual(
+    normalizeIdentities({ officialId: ' ｐｔｃｇ 123 ', honorId: ' h 1 ', playerName: 'Same' }),
+    ['official:PTCG123', 'honor:H1'],
+  );
   assert.equal(normalizeIdentity({ officialId: '', honorId: ' h 1 ', playerName: 'Same' }), 'honor:H1');
   assert.equal(normalizeIdentity({ officialId: '', honorId: '', playerName: 'Same' }), null);
+  assert.deepEqual(normalizeIdentities({ officialId: '', honorId: '', playerName: 'Same' }), []);
 });
 
 test('deterministic credentials recover the same 256-bit token without storing plaintext', () => {
@@ -116,22 +122,44 @@ test('trusted IP normalization handles IPv4, mapped IPv4, and IPv6', () => {
 
 test('event registration config is strict and fail closed', () => {
   const timestamp = { toMillis: () => Date.now() + 1000 };
+  assert.deepEqual(classifyPreRegistrationConfig({ enabled: true, capacity: 8, deadline: timestamp }), {
+    status: 'enabled', capacity: 8, deadline: timestamp, waitlistEnabled: false,
+  });
   assert.deepEqual(classifyPreRegistrationConfig({ schemaVersion: 1, enabled: true, capacity: 8, deadline: timestamp }), {
     status: 'enabled', capacity: 8, deadline: timestamp, waitlistEnabled: false,
   });
   assert.equal(classifyPreRegistrationConfig({ schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 8, deadline: timestamp }).waitlistEnabled, true);
+  for (const waitlistEnabled of [undefined, null, false, 'true', 1, {}, []]) {
+    const config = { schemaVersion: 2, enabled: true, capacity: 8, deadline: timestamp };
+    if (waitlistEnabled !== undefined) config.waitlistEnabled = waitlistEnabled;
+    const result = classifyPreRegistrationConfig(config);
+    assert.equal(result.status, 'enabled');
+    assert.equal(result.waitlistEnabled, false);
+  }
   assert.equal(classifyPreRegistrationConfig({ schemaVersion: 1, enabled: true, capacity: 257, deadline: null }).status, 'malformed');
+  assert.equal(classifyPreRegistrationConfig({ schemaVersion: 1, enabled: true, capacity: '8', deadline: null }).status, 'malformed');
   assert.equal(classifyPreRegistrationConfig({ schemaVersion: 1, enabled: true, capacity: 8, deadline: null, extra: true }).status, 'malformed');
-  assert.equal(classifyPreRegistrationConfig({ schemaVersion: 2, enabled: true, capacity: 8, deadline: null }).status, 'malformed');
+  assert.equal(classifyPreRegistrationConfig({ enabled: true, capacity: 8, deadline: null, extra: true }).status, 'malformed');
+  assert.equal(classifyPreRegistrationConfig({ schemaVersion: 3, enabled: true, capacity: 8, deadline: null }).status, 'malformed');
 });
 
 test('public management view supports active, waitlisted, and cancelled without persisting rank', () => {
   const base = { registrationId: 'reg-1', playerName: 'P', officialId: '', deckName: '', honorId: '' };
   assert.equal(publicRegistration({ ...base, status: 'active' }).canUpdate, true);
-  const waitlisted = publicRegistration({ ...base, status: 'waitlisted' }, undefined, 3);
+  const waitlisted = publicRegistration(
+    { ...base, status: 'waitlisted' },
+    undefined,
+    { state: 'available', rank: 3 },
+  );
   assert.equal(waitlisted.waitlistRank, 3);
+  assert.equal(waitlisted.waitlistRankState, 'available');
   assert.equal(waitlisted.canCancel, true);
-  assert.equal(publicRegistration({ ...base, status: 'cancelled' }).canUpdate, false);
+  const unavailable = publicRegistration({ ...base, status: 'waitlisted' });
+  assert.equal(unavailable.waitlistRank, null);
+  assert.equal(unavailable.waitlistRankState, 'unavailable');
+  const cancelled = publicRegistration({ ...base, status: 'cancelled' });
+  assert.equal(cancelled.canUpdate, false);
+  assert.equal(cancelled.waitlistRankState, 'not_applicable');
 });
 
 test('management lifecycle is read-only after close/deadline/start and cancel stays open until start', () => {

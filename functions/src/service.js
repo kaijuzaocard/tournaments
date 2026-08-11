@@ -10,6 +10,7 @@ import {
   eventStartMillis,
   isLiveRegistrationStatus,
   normalizeIdentity,
+  normalizeIdentities,
   publicRegistration,
   validateManagePayload,
   validateSubmitPayload,
@@ -24,10 +25,16 @@ import {
 } from './security.js';
 
 export class ServiceError extends Error {
-  constructor(code, message = code) {
-    super(message);
+  constructor(code, publicDetails = null) {
+    super(code);
     this.name = 'ServiceError';
     this.code = code;
+    this.publicDetails = code === 'PRE_REGISTRATION_FULL'
+      ? Object.freeze({
+        code: 'PRE_REGISTRATION_FULL',
+        waitlistAvailable: publicDetails?.waitlistAvailable === true,
+      })
+      : undefined;
   }
 }
 
@@ -48,15 +55,38 @@ function assertEventAcceptsRegistration(event, nowMillis) {
   return config;
 }
 
-function waitlistRank(snapshot, ownSequence) {
-  if (!Number.isSafeInteger(ownSequence) || ownSequence < 1) throw new ServiceError('WAITLIST_STATE_INVALID');
-  let rank = 0;
-  snapshot.forEach((document) => {
-    const sequence = document.data().waitlistSequence;
-    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new ServiceError('WAITLIST_STATE_INVALID');
-    if (sequence <= ownSequence) rank += 1;
+function unavailableWaitlistRank(reason) {
+  console.warn('Calendar waitlist rank unavailable', {
+    code: 'WAITLIST_RANK_UNAVAILABLE',
+    reason,
   });
-  return rank || null;
+  return { state: 'unavailable', rank: null };
+}
+
+function waitlistRank(snapshot, registrationId, ownSequence) {
+  if (!Number.isSafeInteger(ownSequence) || ownSequence < 1) {
+    return unavailableWaitlistRank('OWN_SEQUENCE_INVALID');
+  }
+  const sequences = new Set();
+  let ownMatches = 0;
+  for (const document of snapshot.docs) {
+    const entry = document.data();
+    const sequence = entry.waitlistSequence;
+    if (!Number.isSafeInteger(sequence) || sequence < 1) {
+      return unavailableWaitlistRank('LIVE_SEQUENCE_INVALID');
+    }
+    if (sequences.has(sequence)) return unavailableWaitlistRank('DUPLICATE_LIVE_SEQUENCE');
+    sequences.add(sequence);
+    if ((entry.registrationId || document.id) === registrationId) {
+      ownMatches += 1;
+      if (sequence !== ownSequence) return unavailableWaitlistRank('OWN_SEQUENCE_MISMATCH');
+    }
+  }
+  if (ownMatches !== 1 || !sequences.has(ownSequence)) {
+    return unavailableWaitlistRank('OWN_ENTRY_NOT_PROVEN');
+  }
+  const ordered = [...sequences].sort((left, right) => left - right);
+  return { state: 'available', rank: ordered.indexOf(ownSequence) + 1 };
 }
 
 export function createPreRegistrationService({ db, FieldValue, Timestamp, secret, now = () => Date.now() }) {
@@ -72,6 +102,65 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
   const entriesWithStatus = (eventId, status) => registrationRef(eventId)
     .collection('entries')
     .where('status', '==', status);
+  const liveEntries = (eventId) => registrationRef(eventId)
+    .collection('entries')
+    .where('status', 'in', [ACTIVE_STATUS, WAITLISTED_STATUS]);
+
+  const hashesForIdentities = (eventId, identities) => identities
+    .map((identity) => hmac(secret, 'identity', `${eventId}:${identity}`));
+  const identityHashesForFields = (eventId, fields) => hashesForIdentities(
+    eventId,
+    normalizeIdentities(fields),
+  );
+  const identityHashesForEntry = (eventId, entry) => [...new Set([
+    ...(Array.isArray(entry.identityHashes)
+      ? entry.identityHashes.filter((value) => typeof value === 'string' && value)
+      : []),
+    ...(typeof entry.identityHash === 'string' && entry.identityHash ? [entry.identityHash] : []),
+    ...identityHashesForFields(eventId, entry),
+  ])];
+
+  const sameIdentityHashes = (left, right) => left.length === right.length
+    && left.every((value) => right.includes(value));
+
+  async function checkLegacyIdentityConflicts({
+    transaction,
+    eventId,
+    registrationId,
+    requestedIdentities,
+    aggregate,
+  }) {
+    if (aggregate === null || aggregate?.identityAuthorityVersion === 2) return true;
+    const snapshot = await transaction.get(liveEntries(eventId));
+    const requested = new Set(requestedIdentities);
+    let allLiveEntriesUseMultiIdentityLocks = true;
+    for (const document of snapshot.docs) {
+      const entry = document.data();
+      const entryRegistrationId = entry.registrationId || document.id;
+      const entryIdentities = normalizeIdentities(entry);
+      const expectedHashes = hashesForIdentities(eventId, entryIdentities);
+      const storedHashes = Array.isArray(entry.identityHashes)
+        ? [...new Set(entry.identityHashes.filter((value) => typeof value === 'string' && value))]
+        : null;
+      if (!storedHashes || !sameIdentityHashes(storedHashes, expectedHashes)) {
+        allLiveEntriesUseMultiIdentityLocks = false;
+      }
+      if (entryRegistrationId !== registrationId
+        && entryIdentities.some((identity) => requested.has(identity))) {
+        throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
+      }
+    }
+    return allLiveEntriesUseMultiIdentityLocks;
+  }
+
+  async function readIdentityLocks(transaction, eventId, hashes) {
+    const locks = new Map();
+    for (const hash of hashes) {
+      const reference = identityRef(eventId, hash);
+      locks.set(hash, { reference, snapshot: await transaction.get(reference) });
+    }
+    return locks;
+  }
 
   function readLiveCounts(aggregate) {
     const aggregateFields = ['activeCount', 'waitlistedCount', 'nextWaitlistSequence'];
@@ -105,24 +194,26 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
     };
   }
 
-  function writeCounts(transaction, eventId, aggregate, timestamp) {
+  function writeCounts(transaction, eventId, aggregate, timestamp, { identityAuthorityReady = false } = {}) {
     const counts = {
       schemaVersion: SCHEMA_VERSION,
       activeCount: aggregate.activeCount,
       waitlistedCount: aggregate.waitlistedCount,
       updatedAt: timestamp,
     };
-    transaction.set(registrationRef(eventId), {
+    const privateCounts = {
       ...counts,
       nextWaitlistSequence: aggregate.nextWaitlistSequence,
-    }, { merge: true });
+    };
+    if (identityAuthorityReady) privateCounts.identityAuthorityVersion = 2;
+    transaction.set(registrationRef(eventId), privateCounts, { merge: true });
     transaction.set(statsRef(eventId), counts);
   }
 
-  async function currentWaitlistRank(eventId, sequence) {
-    if (sequence === null) return null;
+  async function currentWaitlistRank(eventId, registrationId, sequence) {
+    if (sequence === null) return { state: 'not_applicable', rank: null };
     const snapshot = await entriesWithStatus(eventId, WAITLISTED_STATUS).get();
-    return waitlistRank(snapshot, sequence);
+    return waitlistRank(snapshot, registrationId, sequence);
   }
 
   async function consumeRateLimit({ scope, subject, limit, windowMs }) {
@@ -154,10 +245,16 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
     const credentials = deterministicCredentials(secret, payload.requestId, fingerprint);
     const status = operation.status === WAITLISTED_STATUS ? WAITLISTED_STATUS : ACTIVE_STATUS;
     const sequence = status === WAITLISTED_STATUS ? operation.waitlistSequence : null;
+    const rankResult = await currentWaitlistRank(
+      payload.calendarEventId,
+      operation.registrationId || credentials.registrationId,
+      sequence,
+    );
     return {
       ...credentials,
       status,
-      waitlistRank: await currentWaitlistRank(payload.calendarEventId, sequence),
+      waitlistRank: rankResult.rank,
+      waitlistRankState: rankResult.state,
       replayed: true,
     };
   }
@@ -176,8 +273,10 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
 
       const ip = normalizeTrustedIp(rawIp);
       await consumeRateLimit({ scope: 'submit_ip', subject: ip, limit: 8, windowMs: 10 * 60 * 1000 });
+      const identities = normalizeIdentities(payload);
+      const identityHashes = hashesForIdentities(payload.calendarEventId, identities);
       const identity = normalizeIdentity(payload);
-      const identityHash = identity ? hmac(secret, 'identity', `${payload.calendarEventId}:${identity}`) : null;
+      const identityHash = identityHashes[0] ?? null;
       if (identityHash) {
         await consumeRateLimit({
           scope: 'submit_identity',
@@ -212,16 +311,27 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
         let status = ACTIVE_STATUS;
         let sequence = null;
         if (counts.activeCount >= config.capacity) {
-          if (!config.waitlistEnabled || !payload.allowWaitlist) throw new ServiceError('PRE_REGISTRATION_FULL');
+          if (!config.waitlistEnabled || !payload.allowWaitlist) {
+            throw new ServiceError('PRE_REGISTRATION_FULL', {
+              waitlistAvailable: config.waitlistEnabled === true,
+            });
+          }
           status = WAITLISTED_STATUS;
           sequence = counts.nextWaitlistSequence;
         }
 
-        let duplicateReference = null;
-        if (identityHash) {
-          duplicateReference = identityRef(payload.calendarEventId, identityHash);
-          const duplicateSnapshot = await transaction.get(duplicateReference);
-          if (duplicateSnapshot.exists && isLiveRegistrationStatus(duplicateSnapshot.data().status)) {
+        const identityAuthorityReady = await checkLegacyIdentityConflicts({
+          transaction,
+          eventId: payload.calendarEventId,
+          registrationId: credentials.registrationId,
+          requestedIdentities: identities,
+          aggregate,
+        });
+        const identityLocks = await readIdentityLocks(transaction, payload.calendarEventId, identityHashes);
+        for (const { snapshot } of identityLocks.values()) {
+          if (snapshot.exists
+            && snapshot.data().registrationId !== credentials.registrationId
+            && isLiveRegistrationStatus(snapshot.data().status)) {
             throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
           }
         }
@@ -238,6 +348,7 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
           status,
           tokenHash: hashManagementToken(secret, credentials.managementToken),
           identityHash,
+          identityHashes,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -252,8 +363,8 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
         };
         if (sequence !== null) operation.waitlistSequence = sequence;
         transaction.create(operationReference, operation);
-        if (duplicateReference) {
-          transaction.set(duplicateReference, {
+        for (const { reference } of identityLocks.values()) {
+          transaction.set(reference, {
             schemaVersion: SCHEMA_VERSION,
             registrationId: credentials.registrationId,
             status,
@@ -264,14 +375,20 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
           activeCount: counts.activeCount + (status === ACTIVE_STATUS ? 1 : 0),
           waitlistedCount: counts.waitlistedCount + (status === WAITLISTED_STATUS ? 1 : 0),
           nextWaitlistSequence: sequence === null ? counts.nextWaitlistSequence : sequence + 1,
-        }, timestamp);
+        }, timestamp, { identityAuthorityReady });
         return { created: true, status, waitlistSequence: sequence };
       });
 
+      const rankResult = await currentWaitlistRank(
+        payload.calendarEventId,
+        credentials.registrationId,
+        outcome.waitlistSequence,
+      );
       return {
         ...credentials,
         status: outcome.status,
-        waitlistRank: await currentWaitlistRank(payload.calendarEventId, outcome.waitlistSequence),
+        waitlistRank: rankResult.rank,
+        waitlistRankState: rankResult.state,
         replayed: !outcome.created,
       };
     } catch (error) {
@@ -300,12 +417,12 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
 
       return await db.runTransaction(async (transaction) => {
         const { reference, entry, policy } = await getVerifiedEntryAndEvent(transaction, payload);
-        let rank = null;
+        let rankResult = { state: 'not_applicable', rank: null };
         if (entry.status === WAITLISTED_STATUS && payload.action !== 'cancel') {
           const waitlistedSnapshot = await transaction.get(entriesWithStatus(payload.calendarEventId, WAITLISTED_STATUS));
-          rank = waitlistRank(waitlistedSnapshot, entry.waitlistSequence);
+          rankResult = waitlistRank(waitlistedSnapshot, payload.registrationId, entry.waitlistSequence);
         }
-        if (payload.action === 'get') return publicRegistration(entry, policy, rank);
+        if (payload.action === 'get') return publicRegistration(entry, policy, rankResult);
         if (payload.action === 'cancel') {
           if (entry.status === CANCELLED_STATUS) return publicRegistration(entry, policy);
           if (!isLiveRegistrationStatus(entry.status)) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
@@ -314,26 +431,35 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
           const aggregateSnapshot = await transaction.get(aggregateReference);
           const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
           const counts = readLiveCounts(aggregate);
-          const identityReference = entry.identityHash
-            ? identityRef(payload.calendarEventId, entry.identityHash)
-            : null;
-          const identitySnapshot = identityReference ? await transaction.get(identityReference) : null;
+          const previousIdentityHashes = identityHashesForEntry(payload.calendarEventId, entry);
+          const identityLocks = await readIdentityLocks(
+            transaction,
+            payload.calendarEventId,
+            previousIdentityHashes,
+          );
           const timestamp = FieldValue.serverTimestamp();
           transaction.update(reference, {
             status: CANCELLED_STATUS,
             cancelledAt: timestamp,
             updatedAt: timestamp,
           });
-          if (identityReference && identitySnapshot.exists
-            && identitySnapshot.data().registrationId === payload.registrationId) {
-            transaction.delete(identityReference);
+          for (const { reference: identityReference, snapshot: identitySnapshot } of identityLocks.values()) {
+            if (identitySnapshot.exists
+              && identitySnapshot.data().registrationId === payload.registrationId) {
+              transaction.delete(identityReference);
+            }
           }
           writeCounts(transaction, payload.calendarEventId, {
             activeCount: Math.max(0, counts.activeCount - (entry.status === ACTIVE_STATUS ? 1 : 0)),
             waitlistedCount: Math.max(0, counts.waitlistedCount - (entry.status === WAITLISTED_STATUS ? 1 : 0)),
             nextWaitlistSequence: counts.nextWaitlistSequence,
           }, timestamp);
-          return { ...publicRegistration(entry, policy), status: CANCELLED_STATUS, canUpdate: false, canCancel: false };
+          return publicRegistration({
+            ...entry,
+            status: CANCELLED_STATUS,
+            cancelledAt: timestamp,
+            updatedAt: timestamp,
+          }, policy);
         }
 
         if (!isLiveRegistrationStatus(entry.status)) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
@@ -344,43 +470,58 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
           deckName: payload.deckName,
           honorId: payload.honorId,
         };
-        const nextIdentity = normalizeIdentity(nextFields);
-        const nextIdentityHash = nextIdentity ? hmac(secret, 'identity', `${payload.calendarEventId}:${nextIdentity}`) : null;
-        const identityChanged = nextIdentityHash !== entry.identityHash;
-        const nextIdentityReference = nextIdentityHash && identityChanged
-          ? identityRef(payload.calendarEventId, nextIdentityHash)
-          : null;
-        const previousIdentityReference = entry.identityHash && identityChanged
-          ? identityRef(payload.calendarEventId, entry.identityHash)
-          : null;
-        const duplicateSnapshot = nextIdentityReference ? await transaction.get(nextIdentityReference) : null;
-        const previousIdentitySnapshot = previousIdentityReference
-          ? await transaction.get(previousIdentityReference)
-          : null;
-        if (duplicateSnapshot) {
-          if (duplicateSnapshot.exists && isLiveRegistrationStatus(duplicateSnapshot.data().status)) {
+        const nextIdentities = normalizeIdentities(nextFields);
+        const nextIdentityHashes = hashesForIdentities(payload.calendarEventId, nextIdentities);
+        const previousIdentityHashes = identityHashesForEntry(payload.calendarEventId, entry);
+        const allIdentityHashes = [...new Set([...previousIdentityHashes, ...nextIdentityHashes])];
+        const aggregateSnapshot = await transaction.get(registrationRef(payload.calendarEventId));
+        const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
+        await checkLegacyIdentityConflicts({
+          transaction,
+          eventId: payload.calendarEventId,
+          registrationId: payload.registrationId,
+          requestedIdentities: nextIdentities,
+          aggregate,
+        });
+        const identityLocks = await readIdentityLocks(
+          transaction,
+          payload.calendarEventId,
+          allIdentityHashes,
+        );
+        for (const hash of nextIdentityHashes) {
+          const duplicateSnapshot = identityLocks.get(hash).snapshot;
+          if (duplicateSnapshot.exists
+            && duplicateSnapshot.data().registrationId !== payload.registrationId
+            && isLiveRegistrationStatus(duplicateSnapshot.data().status)) {
             throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
           }
         }
         const timestamp = FieldValue.serverTimestamp();
-        if (nextIdentityReference) {
-          transaction.set(nextIdentityReference, {
+        for (const hash of nextIdentityHashes) {
+          transaction.set(identityLocks.get(hash).reference, {
             schemaVersion: SCHEMA_VERSION,
             registrationId: payload.registrationId,
             status: entry.status,
             updatedAt: timestamp,
           });
         }
-        if (previousIdentityReference && previousIdentitySnapshot.exists
-          && previousIdentitySnapshot.data().registrationId === payload.registrationId) {
-          transaction.delete(previousIdentityReference);
+        for (const hash of previousIdentityHashes.filter((value) => !nextIdentityHashes.includes(value))) {
+          const previousLock = identityLocks.get(hash);
+          if (previousLock.snapshot.exists
+            && previousLock.snapshot.data().registrationId === payload.registrationId) {
+            transaction.delete(previousLock.reference);
+          }
         }
         transaction.update(reference, {
           ...nextFields,
-          identityHash: nextIdentityHash,
+          identityHash: nextIdentityHashes[0] ?? null,
+          identityHashes: nextIdentityHashes,
           updatedAt: timestamp,
         });
-        return { ...publicRegistration({ ...entry, ...nextFields }, policy, rank), ...nextFields };
+        return {
+          ...publicRegistration({ ...entry, ...nextFields }, policy, rankResult),
+          ...nextFields,
+        };
       });
     } catch (error) {
       const converted = asServiceError(error);
