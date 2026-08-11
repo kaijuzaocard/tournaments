@@ -3,6 +3,7 @@ import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
 import { defineSecret, defineString } from 'firebase-functions/params';
 import { createPreRegistrationService, ServiceError } from './src/service.js';
+import { SCHEMA_VERSION } from './src/contracts.js';
 import {
   HandoffServiceError,
   createTournamentPreRegistrationHandoffService,
@@ -173,9 +174,11 @@ export const submitTournamentPreRegistration = onCall(callableOptions, async (re
   try {
     const result = await functionService().submit(request.data, callableClientIp(request));
     return {
-      schemaVersion: 1,
+      schemaVersion: SCHEMA_VERSION,
       registrationId: result.registrationId,
       managementToken: result.managementToken,
+      status: result.status,
+      waitlistRank: result.waitlistRank,
       replayed: result.replayed,
     };
   } catch (error) {

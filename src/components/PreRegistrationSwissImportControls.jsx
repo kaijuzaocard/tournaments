@@ -28,6 +28,7 @@ function entryStatusLabel(status) {
     available: '可匯入',
     already_imported: '已匯入瑞士制',
     import_conflict: '已匯入其他賽事',
+    waitlisted: '候補（不可匯入）',
     cancelled: '已取消',
     malformed: '資料格式異常',
   }[status] || status;

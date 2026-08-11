@@ -1,13 +1,16 @@
 export const APP_ID = 'kaijuzaocard-main';
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+export const LEGACY_SCHEMA_VERSION = 1;
 export const MAX_CAPACITY = 256;
 export const ACTIVE_STATUS = 'active';
+export const WAITLISTED_STATUS = 'waitlisted';
 export const CANCELLED_STATUS = 'cancelled';
+export const LIVE_STATUSES = Object.freeze([ACTIVE_STATUS, WAITLISTED_STATUS]);
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const hasControlCharacters = (value) => Array.from(value)
   .some((character) => character.codePointAt(0) < 32 || character.codePointAt(0) === 127);
-const SUBMIT_FIELDS = Object.freeze([
+const SUBMIT_BASE_FIELDS = Object.freeze([
   'calendarEventId',
   'deckName',
   'honorId',
@@ -73,10 +76,19 @@ export function normalizeCustomerFields(value) {
 }
 
 export function validateSubmitPayload(value) {
-  assertExactKeys(value, SUBMIT_FIELDS);
+  assertPlainObject(value);
+  const actual = Object.keys(value).sort();
+  const expected = [...SUBMIT_BASE_FIELDS, ...(Object.hasOwn(value, 'allowWaitlist') ? ['allowWaitlist'] : [])].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new ContractError('UNKNOWN_OR_MISSING_FIELDS');
+  }
+  if (Object.hasOwn(value, 'allowWaitlist') && typeof value.allowWaitlist !== 'boolean') {
+    throw new ContractError('INVALID_ALLOW_WAITLIST');
+  }
   return {
     requestId: safeId(value.requestId, 'request_id'),
     calendarEventId: safeId(value.calendarEventId, 'calendar_event_id'),
+    allowWaitlist: value.allowWaitlist === true,
     ...normalizeCustomerFields(value),
   };
 }
@@ -102,17 +114,27 @@ export function validateManagePayload(value) {
 export function classifyPreRegistrationConfig(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { status: 'disabled' };
   const keys = Object.keys(value).sort();
-  const expected = ['capacity', 'deadline', 'enabled', 'schemaVersion'];
+  const isLegacy = value.schemaVersion === LEGACY_SCHEMA_VERSION;
+  const expected = isLegacy
+    ? ['capacity', 'deadline', 'enabled', 'schemaVersion']
+    : ['capacity', 'deadline', 'enabled', 'schemaVersion', 'waitlistEnabled'];
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
     return { status: 'malformed' };
   }
-  if (value.schemaVersion !== SCHEMA_VERSION || typeof value.enabled !== 'boolean') return { status: 'malformed' };
+  if (![LEGACY_SCHEMA_VERSION, SCHEMA_VERSION].includes(value.schemaVersion)
+    || typeof value.enabled !== 'boolean'
+    || (!isLegacy && typeof value.waitlistEnabled !== 'boolean')) return { status: 'malformed' };
   if (!Number.isSafeInteger(value.capacity) || value.capacity < 1 || value.capacity > MAX_CAPACITY) {
     return { status: 'malformed' };
   }
   const deadline = value.deadline;
   if (deadline !== null && typeof deadline?.toMillis !== 'function') return { status: 'malformed' };
-  return { status: value.enabled ? 'enabled' : 'disabled', capacity: value.capacity, deadline };
+  return {
+    status: value.enabled ? 'enabled' : 'disabled',
+    capacity: value.capacity,
+    deadline,
+    waitlistEnabled: !isLegacy && value.waitlistEnabled === true,
+  };
 }
 
 export function eventStartMillis(event) {
@@ -130,6 +152,10 @@ export function normalizeIdentity(fields) {
   return null;
 }
 
+export function isLiveRegistrationStatus(status) {
+  return LIVE_STATUSES.includes(status);
+}
+
 export function classifyRegistrationManagementPolicy(event, nowMillis) {
   const start = eventStartMillis(event);
   if (start === null) return { state: 'configuration_error', canUpdate: false, canCancel: false };
@@ -144,7 +170,8 @@ export function classifyRegistrationManagementPolicy(event, nowMillis) {
   return { state: 'open', canUpdate: true, canCancel: true };
 }
 
-export function publicRegistration(entry, policy = { state: 'open', canUpdate: true, canCancel: true }) {
+export function publicRegistration(entry, policy = { state: 'open', canUpdate: true, canCancel: true }, waitlistRank = null) {
+  const live = isLiveRegistrationStatus(entry.status);
   return {
     schemaVersion: SCHEMA_VERSION,
     registrationId: entry.registrationId,
@@ -153,11 +180,14 @@ export function publicRegistration(entry, policy = { state: 'open', canUpdate: t
     deckName: entry.deckName,
     honorId: entry.honorId,
     status: entry.status,
+    waitlistRank: entry.status === WAITLISTED_STATUS && Number.isSafeInteger(waitlistRank) && waitlistRank > 0
+      ? waitlistRank
+      : null,
     createdAt: entry.createdAt?.toDate?.().toISOString?.() ?? null,
     updatedAt: entry.updatedAt?.toDate?.().toISOString?.() ?? null,
     cancelledAt: entry.cancelledAt?.toDate?.().toISOString?.() ?? null,
     managementState: policy.state,
-    canUpdate: entry.status === ACTIVE_STATUS && policy.canUpdate,
-    canCancel: entry.status === ACTIVE_STATUS && policy.canCancel,
+    canUpdate: live && policy.canUpdate,
+    canCancel: live && policy.canCancel,
   };
 }

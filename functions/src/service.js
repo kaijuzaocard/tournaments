@@ -4,9 +4,11 @@ import {
   CANCELLED_STATUS,
   ContractError,
   SCHEMA_VERSION,
+  WAITLISTED_STATUS,
   classifyPreRegistrationConfig,
   classifyRegistrationManagementPolicy,
   eventStartMillis,
+  isLiveRegistrationStatus,
   normalizeIdentity,
   publicRegistration,
   validateManagePayload,
@@ -46,6 +48,17 @@ function assertEventAcceptsRegistration(event, nowMillis) {
   return config;
 }
 
+function waitlistRank(snapshot, ownSequence) {
+  if (!Number.isSafeInteger(ownSequence) || ownSequence < 1) throw new ServiceError('WAITLIST_STATE_INVALID');
+  let rank = 0;
+  snapshot.forEach((document) => {
+    const sequence = document.data().waitlistSequence;
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new ServiceError('WAITLIST_STATE_INVALID');
+    if (sequence <= ownSequence) rank += 1;
+  });
+  return rank || null;
+}
+
 export function createPreRegistrationService({ db, FieldValue, Timestamp, secret, now = () => Date.now() }) {
   const root = (...parts) => db.doc(['artifacts', APP_ID, ...parts].join('/'));
   const eventRef = (eventId) => root('public', 'data', 'monster_tournaments', eventId);
@@ -55,6 +68,62 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
   const identityRef = (eventId, identityHash) => registrationRef(eventId).collection('identities').doc(identityHash);
   const statsRef = (eventId) => root('public', 'data', 'tournamentPreRegistrationStats', eventId);
   const rateLimitRef = (id) => root('private', 'data', 'tournamentPreRegistrationRateLimits', id);
+
+  const entriesWithStatus = (eventId, status) => registrationRef(eventId)
+    .collection('entries')
+    .where('status', '==', status);
+
+  function readLiveCounts(aggregate) {
+    const aggregateFields = ['activeCount', 'waitlistedCount', 'nextWaitlistSequence'];
+    const hasCompleteAggregate = aggregateFields.every((field) => Object.hasOwn(aggregate ?? {}, field));
+    if (hasCompleteAggregate) {
+      if (!Number.isSafeInteger(aggregate.activeCount) || aggregate.activeCount < 0
+        || !Number.isSafeInteger(aggregate.waitlistedCount) || aggregate.waitlistedCount < 0
+        || !Number.isSafeInteger(aggregate.nextWaitlistSequence) || aggregate.nextWaitlistSequence < 1) {
+        throw new ServiceError('WAITLIST_STATE_INVALID');
+      }
+      return {
+        activeCount: aggregate.activeCount,
+        waitlistedCount: aggregate.waitlistedCount,
+        nextWaitlistSequence: aggregate.nextWaitlistSequence,
+      };
+    }
+
+    // B2A has always written the private aggregate in the same transaction as
+    // every entry. A missing document therefore means a new event, while a v1
+    // aggregate can only contain active entries. Trusting that server-owned
+    // invariant avoids collection-query retries during the first concurrent
+    // submissions and keeps v1 reads compatible.
+    if (aggregate !== null
+      && (!Number.isSafeInteger(aggregate.activeCount) || aggregate.activeCount < 0)) {
+      throw new ServiceError('WAITLIST_STATE_INVALID');
+    }
+    return {
+      activeCount: aggregate?.activeCount ?? 0,
+      waitlistedCount: 0,
+      nextWaitlistSequence: 1,
+    };
+  }
+
+  function writeCounts(transaction, eventId, aggregate, timestamp) {
+    const counts = {
+      schemaVersion: SCHEMA_VERSION,
+      activeCount: aggregate.activeCount,
+      waitlistedCount: aggregate.waitlistedCount,
+      updatedAt: timestamp,
+    };
+    transaction.set(registrationRef(eventId), {
+      ...counts,
+      nextWaitlistSequence: aggregate.nextWaitlistSequence,
+    }, { merge: true });
+    transaction.set(statsRef(eventId), counts);
+  }
+
+  async function currentWaitlistRank(eventId, sequence) {
+    if (sequence === null) return null;
+    const snapshot = await entriesWithStatus(eventId, WAITLISTED_STATUS).get();
+    return waitlistRank(snapshot, sequence);
+  }
 
   async function consumeRateLimit({ scope, subject, limit, windowMs }) {
     const current = now();
@@ -83,13 +152,23 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
     const operation = snapshot.data();
     if (operation.fingerprint !== fingerprint) throw new ServiceError('REQUEST_ID_PAYLOAD_MISMATCH');
     const credentials = deterministicCredentials(secret, payload.requestId, fingerprint);
-    return { ...credentials, replayed: true };
+    const status = operation.status === WAITLISTED_STATUS ? WAITLISTED_STATUS : ACTIVE_STATUS;
+    const sequence = status === WAITLISTED_STATUS ? operation.waitlistSequence : null;
+    return {
+      ...credentials,
+      status,
+      waitlistRank: await currentWaitlistRank(payload.calendarEventId, sequence),
+      replayed: true,
+    };
   }
 
   async function submit(rawPayload, rawIp) {
     try {
       const payload = validateSubmitPayload(rawPayload);
-      const canonical = stableJson(payload);
+      const fingerprintPayload = payload.allowWaitlist
+        ? payload
+        : Object.fromEntries(Object.entries(payload).filter(([field]) => field !== 'allowWaitlist'));
+      const canonical = stableJson(fingerprintPayload);
       const fingerprint = hmac(secret, 'payload-fingerprint', canonical);
       const operationId = hmac(secret, 'operation-id', payload.requestId);
       const replay = await findReplay(payload, operationId, fingerprint);
@@ -109,29 +188,40 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
       }
 
       const credentials = deterministicCredentials(secret, payload.requestId, fingerprint);
-      const created = await db.runTransaction(async (transaction) => {
+      const outcome = await db.runTransaction(async (transaction) => {
         const eventSnapshot = await transaction.get(eventRef(payload.calendarEventId));
         if (!eventSnapshot.exists) throw new ServiceError('EVENT_NOT_FOUND');
         const config = assertEventAcceptsRegistration(eventSnapshot.data(), now());
         const operationReference = operationRef(payload.calendarEventId, operationId);
         const operationSnapshot = await transaction.get(operationReference);
         if (operationSnapshot.exists) {
-          if (operationSnapshot.data().fingerprint !== fingerprint) throw new ServiceError('REQUEST_ID_PAYLOAD_MISMATCH');
-          return false;
+          const operation = operationSnapshot.data();
+          if (operation.fingerprint !== fingerprint) throw new ServiceError('REQUEST_ID_PAYLOAD_MISMATCH');
+          const status = operation.status === WAITLISTED_STATUS ? WAITLISTED_STATUS : ACTIVE_STATUS;
+          return {
+            created: false,
+            status,
+            waitlistSequence: status === WAITLISTED_STATUS ? operation.waitlistSequence : null,
+          };
         }
 
         const aggregateReference = registrationRef(payload.calendarEventId);
-        await transaction.get(aggregateReference);
-        const entriesQuery = aggregateReference.collection('entries').where('status', '==', ACTIVE_STATUS);
-        const activeSnapshot = await transaction.get(entriesQuery);
-        const activeCount = activeSnapshot.size;
-        if (activeCount >= config.capacity) throw new ServiceError('PRE_REGISTRATION_FULL');
+        const aggregateSnapshot = await transaction.get(aggregateReference);
+        const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
+        const counts = readLiveCounts(aggregate);
+        let status = ACTIVE_STATUS;
+        let sequence = null;
+        if (counts.activeCount >= config.capacity) {
+          if (!config.waitlistEnabled || !payload.allowWaitlist) throw new ServiceError('PRE_REGISTRATION_FULL');
+          status = WAITLISTED_STATUS;
+          sequence = counts.nextWaitlistSequence;
+        }
 
         let duplicateReference = null;
         if (identityHash) {
           duplicateReference = identityRef(payload.calendarEventId, identityHash);
           const duplicateSnapshot = await transaction.get(duplicateReference);
-          if (duplicateSnapshot.exists && duplicateSnapshot.data().status === ACTIVE_STATUS) {
+          if (duplicateSnapshot.exists && isLiveRegistrationStatus(duplicateSnapshot.data().status)) {
             throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
           }
         }
@@ -145,41 +235,45 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
           officialId: payload.officialId,
           deckName: payload.deckName,
           honorId: payload.honorId,
-          status: ACTIVE_STATUS,
+          status,
           tokenHash: hashManagementToken(secret, credentials.managementToken),
           identityHash,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
+        if (sequence !== null) entry.waitlistSequence = sequence;
         transaction.create(entryRef(payload.calendarEventId, credentials.registrationId), entry);
-        transaction.create(operationReference, {
+        const operation = {
           schemaVersion: SCHEMA_VERSION,
           fingerprint,
           registrationId: credentials.registrationId,
+          status,
           createdAt: timestamp,
-        });
+        };
+        if (sequence !== null) operation.waitlistSequence = sequence;
+        transaction.create(operationReference, operation);
         if (duplicateReference) {
           transaction.set(duplicateReference, {
             schemaVersion: SCHEMA_VERSION,
             registrationId: credentials.registrationId,
-            status: ACTIVE_STATUS,
+            status,
             updatedAt: timestamp,
           });
         }
-        transaction.set(aggregateReference, {
-          schemaVersion: SCHEMA_VERSION,
-          activeCount: activeCount + 1,
-          updatedAt: timestamp,
-        }, { merge: true });
-        transaction.set(statsRef(payload.calendarEventId), {
-          schemaVersion: SCHEMA_VERSION,
-          activeCount: activeCount + 1,
-          updatedAt: timestamp,
-        });
-        return true;
+        writeCounts(transaction, payload.calendarEventId, {
+          activeCount: counts.activeCount + (status === ACTIVE_STATUS ? 1 : 0),
+          waitlistedCount: counts.waitlistedCount + (status === WAITLISTED_STATUS ? 1 : 0),
+          nextWaitlistSequence: sequence === null ? counts.nextWaitlistSequence : sequence + 1,
+        }, timestamp);
+        return { created: true, status, waitlistSequence: sequence };
       });
 
-      return { ...credentials, replayed: !created };
+      return {
+        ...credentials,
+        status: outcome.status,
+        waitlistRank: await currentWaitlistRank(payload.calendarEventId, outcome.waitlistSequence),
+        replayed: !outcome.created,
+      };
     } catch (error) {
       throw asServiceError(error);
     }
@@ -206,27 +300,43 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
 
       return await db.runTransaction(async (transaction) => {
         const { reference, entry, policy } = await getVerifiedEntryAndEvent(transaction, payload);
-        if (payload.action === 'get') return publicRegistration(entry, policy);
+        let rank = null;
+        if (entry.status === WAITLISTED_STATUS && payload.action !== 'cancel') {
+          const waitlistedSnapshot = await transaction.get(entriesWithStatus(payload.calendarEventId, WAITLISTED_STATUS));
+          rank = waitlistRank(waitlistedSnapshot, entry.waitlistSequence);
+        }
+        if (payload.action === 'get') return publicRegistration(entry, policy, rank);
         if (payload.action === 'cancel') {
           if (entry.status === CANCELLED_STATUS) return publicRegistration(entry, policy);
-          if (entry.status !== ACTIVE_STATUS) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
+          if (!isLiveRegistrationStatus(entry.status)) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
           if (!policy.canCancel) throw new ServiceError('REGISTRATION_CANCELLATION_CLOSED');
           const aggregateReference = registrationRef(payload.calendarEventId);
-          const activeSnapshot = await transaction.get(aggregateReference.collection('entries').where('status', '==', ACTIVE_STATUS));
-          const activeCount = Math.max(0, activeSnapshot.size - 1);
+          const aggregateSnapshot = await transaction.get(aggregateReference);
+          const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
+          const counts = readLiveCounts(aggregate);
+          const identityReference = entry.identityHash
+            ? identityRef(payload.calendarEventId, entry.identityHash)
+            : null;
+          const identitySnapshot = identityReference ? await transaction.get(identityReference) : null;
           const timestamp = FieldValue.serverTimestamp();
           transaction.update(reference, {
             status: CANCELLED_STATUS,
             cancelledAt: timestamp,
             updatedAt: timestamp,
           });
-          if (entry.identityHash) transaction.delete(identityRef(payload.calendarEventId, entry.identityHash));
-          transaction.set(aggregateReference, { schemaVersion: SCHEMA_VERSION, activeCount, updatedAt: timestamp }, { merge: true });
-          transaction.set(statsRef(payload.calendarEventId), { schemaVersion: SCHEMA_VERSION, activeCount, updatedAt: timestamp });
+          if (identityReference && identitySnapshot.exists
+            && identitySnapshot.data().registrationId === payload.registrationId) {
+            transaction.delete(identityReference);
+          }
+          writeCounts(transaction, payload.calendarEventId, {
+            activeCount: Math.max(0, counts.activeCount - (entry.status === ACTIVE_STATUS ? 1 : 0)),
+            waitlistedCount: Math.max(0, counts.waitlistedCount - (entry.status === WAITLISTED_STATUS ? 1 : 0)),
+            nextWaitlistSequence: counts.nextWaitlistSequence,
+          }, timestamp);
           return { ...publicRegistration(entry, policy), status: CANCELLED_STATUS, canUpdate: false, canCancel: false };
         }
 
-        if (entry.status !== ACTIVE_STATUS) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
+        if (!isLiveRegistrationStatus(entry.status)) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
         if (!policy.canUpdate) throw new ServiceError('REGISTRATION_UPDATE_CLOSED');
         const nextFields = {
           playerName: payload.playerName,
@@ -236,28 +346,41 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
         };
         const nextIdentity = normalizeIdentity(nextFields);
         const nextIdentityHash = nextIdentity ? hmac(secret, 'identity', `${payload.calendarEventId}:${nextIdentity}`) : null;
-        if (nextIdentityHash && nextIdentityHash !== entry.identityHash) {
-          const nextIdentityReference = identityRef(payload.calendarEventId, nextIdentityHash);
-          const duplicateSnapshot = await transaction.get(nextIdentityReference);
-          if (duplicateSnapshot.exists && duplicateSnapshot.data().status === ACTIVE_STATUS) {
+        const identityChanged = nextIdentityHash !== entry.identityHash;
+        const nextIdentityReference = nextIdentityHash && identityChanged
+          ? identityRef(payload.calendarEventId, nextIdentityHash)
+          : null;
+        const previousIdentityReference = entry.identityHash && identityChanged
+          ? identityRef(payload.calendarEventId, entry.identityHash)
+          : null;
+        const duplicateSnapshot = nextIdentityReference ? await transaction.get(nextIdentityReference) : null;
+        const previousIdentitySnapshot = previousIdentityReference
+          ? await transaction.get(previousIdentityReference)
+          : null;
+        if (duplicateSnapshot) {
+          if (duplicateSnapshot.exists && isLiveRegistrationStatus(duplicateSnapshot.data().status)) {
             throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
           }
+        }
+        const timestamp = FieldValue.serverTimestamp();
+        if (nextIdentityReference) {
           transaction.set(nextIdentityReference, {
             schemaVersion: SCHEMA_VERSION,
             registrationId: payload.registrationId,
-            status: ACTIVE_STATUS,
-            updatedAt: FieldValue.serverTimestamp(),
+            status: entry.status,
+            updatedAt: timestamp,
           });
         }
-        if (entry.identityHash && entry.identityHash !== nextIdentityHash) {
-          transaction.delete(identityRef(payload.calendarEventId, entry.identityHash));
+        if (previousIdentityReference && previousIdentitySnapshot.exists
+          && previousIdentitySnapshot.data().registrationId === payload.registrationId) {
+          transaction.delete(previousIdentityReference);
         }
         transaction.update(reference, {
           ...nextFields,
           identityHash: nextIdentityHash,
-          updatedAt: FieldValue.serverTimestamp(),
+          updatedAt: timestamp,
         });
-        return { ...publicRegistration({ ...entry, ...nextFields }, policy), ...nextFields };
+        return { ...publicRegistration({ ...entry, ...nextFields }, policy, rank), ...nextFields };
       });
     } catch (error) {
       const converted = asServiceError(error);

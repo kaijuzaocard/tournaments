@@ -22,6 +22,7 @@ import {
 } from './utils/swissIntegration.js';
 import {
   formatTaipeiDateTimeLocal,
+  normalizePreRegistrationStats,
   normalizePreRegistrationSettings,
   preparePreRegistrationForWrite,
 } from './utils/preRegistration.js';
@@ -123,7 +124,7 @@ export default function App() {
   const [formData, setFormData] = useState({
     gameType: '', title: '', fee: '', entryFee: '', capacity: 0,
     suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [],
-    preRegistration: { schemaVersion: 1, enabled: false, capacity: 0, deadline: null },
+    preRegistration: { schemaVersion: 2, enabled: false, waitlistEnabled: false, capacity: 0, deadline: null },
   });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
 
@@ -456,7 +457,7 @@ export default function App() {
     setupListener(getCollection('store_closures'), setClosures); 
     setupListener(getCollection('special_openings'), setSpecialOpenings);
     setupListener(getCollection('tournamentPreRegistrationStats'), (data) => {
-      setPreRegistrationStats(Object.fromEntries(data.map((item) => [item.id, item.activeCount])));
+      setPreRegistrationStats(Object.fromEntries(data.map((item) => [item.id, normalizePreRegistrationStats(item)])));
     });
 
     return () => unsubs.forEach(unsub => unsub());
@@ -640,7 +641,7 @@ export default function App() {
       const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
       const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...normalizedForm, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
       await Promise.all(promises);
-      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [], preRegistration: { schemaVersion: 1, enabled: false, capacity: 0, deadline: null } });
+      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [], preRegistration: { schemaVersion: 2, enabled: false, waitlistEnabled: false, capacity: 0, deadline: null } });
       setSchedules([{ date: '', time: '19:00' }]);
       showToast('✅ 賽事已成功發布！');
     } catch (err) {
@@ -671,6 +672,19 @@ export default function App() {
       showToast('✅ 賽事內容已更新！');
     } catch (error) {
       console.error("Error updating document: ", error);
+    }
+  };
+
+  const handleDeleteTournament = async (tournamentId) => {
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', tournamentId));
+      showToast('賽事已刪除。');
+    } catch (error) {
+      const code = error?.code || error?.message || 'DELETE_FAILED';
+      console.error('刪除賽事失敗:', { code });
+      showToast(code === 'permission-denied'
+        ? '此賽事已有預報名紀錄，為避免留下私人孤兒資料，禁止直接刪除。'
+        : `刪除賽事失敗（${code}）。`);
     }
   };
 
@@ -1146,7 +1160,7 @@ export default function App() {
                                               </div>
                                             </div>
                                           )}
-                                          <PreRegistrationPanel event={t} activeCount={preRegistrationStats[t.id] ?? 0} onRegister={setRegistrationEvent} />
+                                          <PreRegistrationPanel event={t} stats={preRegistrationStats[t.id]} onRegister={setRegistrationEvent} />
                                         </div>
                                       </div>
                                     )}
@@ -1251,7 +1265,7 @@ export default function App() {
                               )}
                             </div>
 
-                            <PreRegistrationPanel event={t} activeCount={preRegistrationStats[t.id] ?? 0} onRegister={setRegistrationEvent} />
+                            <PreRegistrationPanel event={t} stats={preRegistrationStats[t.id]} onRegister={setRegistrationEvent} />
 
                             {expandedNotes[t.id] && (
                               <div className="mt-4 pt-4 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
@@ -1435,8 +1449,9 @@ export default function App() {
                                 setFormData({
                                   ...formData,
                                   preRegistration: {
-                                    schemaVersion: 1,
+                                    schemaVersion: 2,
                                     enabled: e.target.checked,
+                                    waitlistEnabled: formData.preRegistration?.waitlistEnabled === true,
                                     capacity: formData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''),
                                     deadline: formData.preRegistration?.deadline ?? null,
                                   },
@@ -1449,6 +1464,7 @@ export default function App() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <label className="text-sm font-bold text-gray-700">預報名人數上限<input required type="number" min="1" max="256" step="1" value={formData.preRegistration.capacity} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label>
                               <label className="text-sm font-bold text-gray-700">預報名截止時間（選填）<input type="datetime-local" value={formData.preRegistration.deadline || ''} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /><span className="block mt-1 text-xs text-gray-500">Asia/Taipei</span></label>
+                              <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-black text-amber-900"><input type="checkbox" checked={formData.preRegistration.waitlistEnabled === true} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, waitlistEnabled: e.target.checked } })} className="mt-0.5 w-5 h-5 accent-amber-600" /><span>正取額滿時開放玩家主動加入候補<span className="block mt-1 text-xs font-bold text-amber-700">本階段不會自動補位或通知。</span></span></label>
                             </div>
                           )}
                         </div>
@@ -1715,8 +1731,8 @@ export default function App() {
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">人數上限</label><input type="number" min="0" step="1" value={editFormData.capacity ?? 0} onChange={(e) => setEditFormData({...editFormData, capacity: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議瑞士輪數</label><input type="number" min="0" max="50" step="1" value={editFormData.suggestedRounds ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedRounds: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議 Top Cut</label><select value={editFormData.suggestedTopCut ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedTopCut: Number(e.target.value)})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white"><option value={0}>不預設</option><option value={2}>Top 2</option><option value={4}>Top 4</option><option value={8}>Top 8</option><option value={16}>Top 16</option></select></div></div>
 
                                 <div className="border border-emerald-200 bg-emerald-50 p-4 rounded-xl space-y-3">
-                                  <label className="flex items-center justify-between gap-4 text-sm font-black text-emerald-900"><span>開放賽事預報名</span><input type="checkbox" checked={editFormData.preRegistration?.enabled === true} onChange={(e) => { const fallback = Number(editFormData.capacity); setEditFormData({ ...editFormData, preRegistration: { schemaVersion: 1, enabled: e.target.checked, capacity: editFormData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''), deadline: editFormData.preRegistration?.deadline ?? null } }); }} className="w-5 h-5 accent-emerald-600" /></label>
-                                  {(editFormData.preRegistration?.enabled || editFormData.preRegistration?.capacity) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs font-bold text-gray-700">預報名人數上限<input required={editFormData.preRegistration?.enabled} type="number" min="1" max="256" step="1" value={editFormData.preRegistration?.capacity || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label><label className="text-xs font-bold text-gray-700">截止時間（Asia/Taipei）<input type="datetime-local" value={editFormData.preRegistration?.deadline || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label></div>}
+                                  <label className="flex items-center justify-between gap-4 text-sm font-black text-emerald-900"><span>開放賽事預報名</span><input type="checkbox" checked={editFormData.preRegistration?.enabled === true} onChange={(e) => { const fallback = Number(editFormData.capacity); setEditFormData({ ...editFormData, preRegistration: { schemaVersion: 2, enabled: e.target.checked, waitlistEnabled: editFormData.preRegistration?.waitlistEnabled === true, capacity: editFormData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''), deadline: editFormData.preRegistration?.deadline ?? null } }); }} className="w-5 h-5 accent-emerald-600" /></label>
+                                  {(editFormData.preRegistration?.enabled || editFormData.preRegistration?.capacity) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs font-bold text-gray-700">預報名人數上限<input required={editFormData.preRegistration?.enabled} type="number" min="1" max="256" step="1" value={editFormData.preRegistration?.capacity || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label><label className="text-xs font-bold text-gray-700">截止時間（Asia/Taipei）<input type="datetime-local" value={editFormData.preRegistration?.deadline || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label>{editFormData.preRegistration?.enabled && <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-black text-amber-900"><input type="checkbox" checked={editFormData.preRegistration?.waitlistEnabled === true} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, waitlistEnabled: e.target.checked } })} className="mt-0.5 w-5 h-5 accent-amber-600" /><span>正取額滿時開放玩家主動加入候補<span className="block mt-1 font-bold text-amber-700">本階段不會自動補位或通知。</span></span></label>}</div>}
                                 </div>
                                 
                                 <div>
@@ -1814,9 +1830,9 @@ export default function App() {
                                     {swissStatuses[t.id]?.error && <p role="alert" className="mt-2 text-xs font-bold text-rose-700">{swissStatuses[t.id].error}</p>}
                                   </div>
                                 )}
-                                {isAdminAuth && (t.preRegistration || (preRegistrationStats[t.id] ?? 0) > 0) && (
+                                {isAdminAuth && (t.preRegistration || (preRegistrationStats[t.id]?.activeCount ?? 0) > 0 || (preRegistrationStats[t.id]?.waitlistedCount ?? 0) > 0) && (
                                   <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between gap-3">
-                                    <span className="text-sm font-black text-emerald-800">預報名 {preRegistrationStats[t.id] ?? 0} / {t.preRegistration?.capacity ?? '未設定'}</span>
+                                    <span className="text-sm font-black text-emerald-800">正取 {preRegistrationStats[t.id]?.activeCount ?? 0} / {t.preRegistration?.capacity ?? '未設定'} · 候補 {preRegistrationStats[t.id]?.waitlistedCount ?? 0}</span>
                                     <button type="button" onClick={() => setAdminRegistrationEvent(t)} className="px-3 py-2 bg-emerald-700 text-white text-sm font-black rounded-lg hover:bg-emerald-800">查看預報名名單</button>
                                   </div>
                                 )}
@@ -1843,7 +1859,7 @@ export default function App() {
                                       prizeImages: Array.isArray(t.prizeImages) ? t.prizeImages : []
                                     }); 
                                   }} className="flex-1 py-2 text-blue-600 bg-blue-50 rounded-xl hover:bg-blue-100 active:scale-95 transition-all shadow-sm font-bold text-sm">編輯</button>
-                                  <button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id))} className="px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-95 transition-all shadow-sm flex justify-center"><Trash2 className="w-4 h-4"/></button>
+                                  <button type="button" onClick={() => handleDeleteTournament(t.id)} className="px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-95 transition-all shadow-sm flex justify-center"><Trash2 className="w-4 h-4"/></button>
                                 </div>
                                 
                                 {/* 後台也同步顯示展開的資訊 */}
@@ -1906,7 +1922,7 @@ export default function App() {
       </main>
 
       {registrationEvent && (
-        <PreRegistrationDialog event={registrationEvent} functions={functions} onClose={() => setRegistrationEvent(null)} />
+        <PreRegistrationDialog event={registrationEvent.event} allowWaitlist={registrationEvent.allowWaitlist} functions={functions} onClose={() => setRegistrationEvent(null)} />
       )}
       {showManagementDialog && (
         <RegistrationManagementDialog functions={functions} onClose={() => setShowManagementDialog(false)} />

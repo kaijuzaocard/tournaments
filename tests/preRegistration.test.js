@@ -4,11 +4,15 @@ import assert from 'node:assert/strict';
 import {
   buildManagementUrl,
   classifyPreRegistrationAvailability,
+  deriveWaitlistRanks,
   formatTaipeiDateTimeLocal,
   normalizeCustomerFields,
   normalizePreRegistrationSettings,
+  normalizePreRegistrationStats,
   parseTaipeiDateTimeLocal,
   preparePreRegistrationForWrite,
+  registrationStatusLabel,
+  removePreRegistrationSecrets,
 } from '../src/utils/preRegistration.js';
 import { captureManagementRoute } from '../src/utils/managementTokenBootstrap.js';
 
@@ -26,8 +30,9 @@ test('old events without preRegistration remain closed and render no public acti
 
 test('valid settings normalize and cap capacity at a positive safe integer', () => {
   assert.deepEqual(normalizePreRegistrationSettings({ enabled: true, capacity: 8, deadline: null }), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     enabled: true,
+    waitlistEnabled: false,
     capacity: 8,
     deadline: null,
   });
@@ -47,6 +52,37 @@ test('public availability distinguishes open, deadline, full, closed, and ended'
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 0, Date.parse('2030-08-01T18:30:00+08:00')).status, 'deadline');
   assert.equal(classifyPreRegistrationAvailability(futureEvent({ ...settings, enabled: false }), 0, Date.parse('2030-01-01')).status, 'closed');
   assert.equal(classifyPreRegistrationAvailability(futureEvent({ ...settings, deadline: null }), 0, Date.parse('2030-08-01T19:01:00+08:00')).status, 'ended');
+});
+
+test('legacy v1 events default waitlist off while v2 requires explicit opt-in', () => {
+  const legacy = { schemaVersion: 1, enabled: true, capacity: 1, deadline: null };
+  const enabled = { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null };
+  assert.equal(classifyPreRegistrationAvailability(futureEvent(legacy), { activeCount: 1 }, 0).status, 'full');
+  assert.deepEqual(
+    classifyPreRegistrationAvailability(futureEvent(enabled), { activeCount: 1, waitlistedCount: 2 }, 0),
+    {
+      status: 'waitlist',
+      activeCount: 1,
+      waitlistedCount: 2,
+      capacity: 1,
+      settings: enabled,
+    },
+  );
+  assert.deepEqual(normalizePreRegistrationStats({ activeCount: 0, waitlistedCount: 0 }), { activeCount: 0, waitlistedCount: 0 });
+});
+
+test('management and admin presentation preserve all statuses and derive rank without mutation', () => {
+  const entries = [
+    removePreRegistrationSecrets({ registrationId: 'later', status: 'waitlisted', waitlistSequence: 9 }),
+    removePreRegistrationSecrets({ registrationId: 'active', status: 'active' }),
+    removePreRegistrationSecrets({ registrationId: 'cancelled', status: 'cancelled', waitlistSequence: 2 }),
+    removePreRegistrationSecrets({ registrationId: 'first', status: 'waitlisted', waitlistSequence: 4 }),
+  ];
+  assert.deepEqual(deriveWaitlistRanks(entries), { first: 1, later: 2 });
+  assert.equal(registrationStatusLabel('active'), '正取');
+  assert.equal(registrationStatusLabel('waitlisted', 2), '候補 · 目前候補第 2 位');
+  assert.equal(registrationStatusLabel('cancelled'), '已取消');
+  assert.equal(entries[0].waitlistSequence, 9);
 });
 
 test('customer fields trim values and reject control characters or oversized input', () => {
@@ -97,6 +133,17 @@ test('admin entry listener is scoped to the open authorized modal and returns cl
   const component = fs.readFileSync(new URL('../src/components/PreRegistrationDialog.jsx', import.meta.url), 'utf8');
   assert.match(component, /if \(!open \|\| !isAdmin \|\| !event\?\.id\) return undefined/);
   assert.match(component, /return unsubscribe/);
+  assert.match(component, /option value="waitlisted">候補/);
+  assert.doesNotMatch(component, /promote|reorder|通知候補/iu);
+});
+
+test('Calendar preregistration introduces no check-in or handed-off boolean', () => {
+  const sources = [
+    fs.readFileSync(new URL('../src/utils/preRegistration.js', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../functions/src/contracts.js', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../functions/src/service.js', import.meta.url), 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(sources, /checkedIn|handedOff/);
 });
 
 test('B1 Swiss handoff remains present and pre-registration is not added to its payload contract', () => {
