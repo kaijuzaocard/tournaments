@@ -24,6 +24,11 @@ const MANAGE_BASE_FIELDS = Object.freeze([
   'managementToken',
   'registrationId',
 ]);
+const ADMIN_MANAGE_BASE_FIELDS = Object.freeze([
+  'action',
+  'calendarEventId',
+  'registrationId',
+]);
 const CUSTOMER_FIELDS = Object.freeze(['playerName', 'officialId', 'deckName', 'honorId']);
 
 export class ContractError extends Error {
@@ -106,6 +111,23 @@ export function validateManagePayload(value) {
     calendarEventId: safeId(value.calendarEventId, 'calendar_event_id'),
     registrationId: safeId(value.registrationId, 'registration_id'),
     managementToken,
+  };
+  if (action === 'update') Object.assign(result, normalizeCustomerFields(value));
+  return result;
+}
+
+export function validateAdminManagePayload(value) {
+  assertPlainObject(value);
+  const action = value.action;
+  if (!['update', 'cancel'].includes(action)) throw new ContractError('INVALID_ACTION');
+  const expected = action === 'update'
+    ? [...ADMIN_MANAGE_BASE_FIELDS, ...CUSTOMER_FIELDS]
+    : ADMIN_MANAGE_BASE_FIELDS;
+  assertExactKeys(value, expected);
+  const result = {
+    action,
+    calendarEventId: safeId(value.calendarEventId, 'calendar_event_id'),
+    registrationId: safeId(value.registrationId, 'registration_id'),
   };
   if (action === 'update') Object.assign(result, normalizeCustomerFields(value));
   return result;

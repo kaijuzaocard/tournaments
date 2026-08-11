@@ -143,6 +143,8 @@ function callableError(error) {
     'PRE_REGISTRATION_CONFIG_INVALID',
     'PRE_REGISTRATION_DEADLINE_PASSED',
     'PRE_REGISTRATION_FULL',
+    'OFFICIAL_ID_CONFLICT',
+    'HONOR_ID_CONFLICT',
     'POSSIBLE_DUPLICATE_REGISTRATION',
     'REQUEST_ID_PAYLOAD_MISMATCH',
     'REGISTRATION_NOT_FOUND',
@@ -194,6 +196,16 @@ export const manageTournamentPreRegistration = onCall(callableOptions, async (re
   try {
     return await functionService().manage(request.data, callableClientIp(request));
   } catch (error) {
+    throw callableError(error);
+  }
+});
+
+export const adminManageTournamentPreRegistration = onCall(callableOptions, async (request) => {
+  try {
+    requireCalendarAdmin(request);
+    return await functionService().adminManage(request.data);
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
     throw callableError(error);
   }
 });

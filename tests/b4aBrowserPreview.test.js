@@ -82,8 +82,8 @@ test('canonical Vite environment removes inherited production Swiss and unknown 
     VITE_SWISS_ALLOWED_ORIGINS: 'https://swiss-tournament-one.vercel.app',
     VITE_FIREBASE_UNEXPECTED_CREDENTIAL: 'must-not-survive',
   });
-  assert.equal(env.VITE_SWISS_APP_URL, '');
-  assert.equal(env.VITE_SWISS_ALLOWED_ORIGINS, '');
+  assert.equal(env.VITE_SWISS_APP_URL, 'http://127.0.0.1:4174');
+  assert.equal(env.VITE_SWISS_ALLOWED_ORIGINS, 'http://127.0.0.1:4174');
   assert.equal(Object.hasOwn(env, 'VITE_FIREBASE_UNEXPECTED_CREDENTIAL'), false);
   assert.equal(assertBrowserPreviewViteEnvironment(env), true);
 });
@@ -189,7 +189,7 @@ test('E1-E6 blueprint is complete and preserves every requested scenario', () =>
   assert.equal(blueprint.events[1].preRegistration.waitlistEnabled, false);
   assert.equal(blueprint.events[2].preRegistration.waitlistEnabled, true);
   assert.deepEqual(blueprint.scenarios['b4a-preview-e4-last-seat-race'], { active: 1, waitlisted: 0 });
-  assert.deepEqual(blueprint.scenarios['b4a-preview-e5-ranked-waitlist'], { active: 1, waitlisted: 3 });
+  assert.deepEqual(blueprint.scenarios['b4a-preview-e5-ranked-waitlist'], { active: 2, waitlisted: 3 });
   assert.equal(blueprint.scenarios['b4a-preview-e6-malformed-rank'].duplicateWaitlistSequence, true);
 });
 

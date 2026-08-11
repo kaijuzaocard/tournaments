@@ -106,6 +106,19 @@ Waitlist surfaces share one notice: this stage does not auto-promote or send a
 notification, so the player must save the management link and check the latest
 rank themselves.
 
+### Administrator preregistration management
+
+An allowlisted, non-anonymous Google administrator can edit the same four
+canonical customer fields or cancel an active/waitlisted entry from the private
+preregistration list. These actions use the dedicated
+`adminManageTournamentPreRegistration` callable; they never accept or reveal a
+player management token and never write directly from the client to Firestore.
+
+Cancellation marks the entry as cancelled instead of deleting it. It releases
+the entry's identity locks and decrements only the matching live counter. There
+is no status editor, promotion, automatic waitlist fill, notification, check-in,
+or bulk action. Event start and deadline policy remains authoritative.
+
 ### Stop and cleanup
 
 Keep the emulators running while cleaning data:
@@ -122,6 +135,7 @@ Keep the emulators running while cleaning data:
 If the emulators already stopped, use `npm run cleanup:browser:files` to remove
 only harness-owned local files and the ignored manifest.
 
-Emulator mode disables LINE/GAS notifications. Swiss opening is disabled unless
-an explicit loopback `VITE_SWISS_APP_URL` is supplied; it never falls back to
-the production Swiss URL.
+Emulator mode disables LINE/GAS notifications. Its Swiss handoff target and
+allowed origin are pinned to the loopback frontend so active-only selection can
+be inspected without contacting the production Swiss app; it never falls back
+to the production Swiss URL.

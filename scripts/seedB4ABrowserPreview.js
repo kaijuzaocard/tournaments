@@ -10,6 +10,8 @@ import {
 } from './b4aBrowserPreviewData.js';
 import { importB4APreviewAdminFixture } from './b4aBrowserPreviewAuthFixture.js';
 import {
+  B4A_PREVIEW_ADMIN_MANAGEMENT_EVENT_ID,
+  B4A_PREVIEW_ADMIN_MANAGEMENT_SWISS_ID,
   B4A_PREVIEW_ADMIN_PROBE_EVENT_ID,
   B4A_PREVIEW_ADMIN_PROBE_SWISS_ID,
 } from '../src/b4aPreviewAdminFixture.js';
@@ -55,10 +57,12 @@ try {
     const { id, ...eventData } = event;
     batch.set(db.doc(`${publicEventRoot}/${id}`), {
       ...eventData,
-      ...(id === B4A_PREVIEW_ADMIN_PROBE_EVENT_ID ? {
+      ...([B4A_PREVIEW_ADMIN_PROBE_EVENT_ID, B4A_PREVIEW_ADMIN_MANAGEMENT_EVENT_ID].includes(id) ? {
         swissIntegration: {
           schemaVersion: 1,
-          swissTournamentId: B4A_PREVIEW_ADMIN_PROBE_SWISS_ID,
+          swissTournamentId: id === B4A_PREVIEW_ADMIN_PROBE_EVENT_ID
+            ? B4A_PREVIEW_ADMIN_PROBE_SWISS_ID
+            : B4A_PREVIEW_ADMIN_MANAGEMENT_SWISS_ID,
           linkedAt: Timestamp.fromMillis(Date.now()),
         },
       } : {}),

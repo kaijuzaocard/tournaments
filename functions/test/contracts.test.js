@@ -8,6 +8,7 @@ import {
   normalizeIdentity,
   normalizeIdentities,
   publicRegistration,
+  validateAdminManagePayload,
   validateManagePayload,
   validateSubmitPayload,
 } from '../src/contracts.js';
@@ -59,6 +60,56 @@ test('management actions use strict action-specific fields', () => {
   assert.throws(() => validateManagePayload({ ...base, action: 'update' }), /UNKNOWN_OR_MISSING_FIELDS/);
 });
 
+test('admin management accepts only the exact update and cancel contracts', () => {
+  const update = {
+    action: 'update',
+    calendarEventId: 'event-1',
+    registrationId: 'reg-1',
+    playerName: ' Updated Player ',
+    officialId: ' OFFICIAL-1 ',
+    deckName: ' Updated Deck ',
+    honorId: ' HONOR-1 ',
+  };
+  assert.deepEqual(validateAdminManagePayload(update), {
+    ...update,
+    playerName: 'Updated Player',
+    officialId: 'OFFICIAL-1',
+    deckName: 'Updated Deck',
+    honorId: 'HONOR-1',
+  });
+  assert.deepEqual(validateAdminManagePayload({
+    action: 'cancel', calendarEventId: 'event-1', registrationId: 'reg-1',
+  }), {
+    action: 'cancel', calendarEventId: 'event-1', registrationId: 'reg-1',
+  });
+});
+
+test('admin management rejects forged mutation fields and unknown actions', () => {
+  const update = {
+    action: 'update', calendarEventId: 'event-1', registrationId: 'reg-1',
+    playerName: 'Player', officialId: '', deckName: '', honorId: '',
+  };
+  for (const field of [
+    'note', 'status', 'waitlistSequence', 'identityHashes', 'managementToken', 'activeCount', 'arbitraryOverride',
+  ]) {
+    assert.throws(
+      () => validateAdminManagePayload({ ...update, [field]: field === 'identityHashes' ? [] : 'forged' }),
+      /UNKNOWN_OR_MISSING_FIELDS/,
+    );
+  }
+  assert.throws(() => validateAdminManagePayload({ ...update, action: 'get' }), /INVALID_ACTION/);
+  assert.throws(() => validateAdminManagePayload({ ...update, action: 'promote' }), /INVALID_ACTION/);
+});
+
+test('admin auth cannot replace the player token contract and player tokens cannot enter admin contract', () => {
+  const playerBase = { action: 'cancel', calendarEventId: 'event-1', registrationId: 'reg-1' };
+  assert.throws(() => validateManagePayload(playerBase), /UNKNOWN_OR_MISSING_FIELDS/);
+  assert.throws(
+    () => validateAdminManagePayload({ ...playerBase, managementToken: 'a'.repeat(43) }),
+    /UNKNOWN_OR_MISSING_FIELDS/,
+  );
+});
+
 test('identity normalization keeps a legacy primary while exposing every canonical identity', () => {
   assert.equal(normalizeIdentity({ officialId: ' ptcg 123 ', honorId: 'H1', playerName: 'Same' }), 'official:PTCG123');
   assert.deepEqual(
@@ -85,6 +136,7 @@ test('the deploy entry preserves B2A callables and exports the three B2B operati
   const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   assert.match(source, /export const submitTournamentPreRegistration/);
   assert.match(source, /export const manageTournamentPreRegistration/);
+  assert.match(source, /export const adminManageTournamentPreRegistration/);
   assert.match(source, /export const createTournamentPreRegistrationHandoff/);
   assert.match(source, /export const manageTournamentPreRegistrationHandoff/);
   assert.match(source, /export const getTournamentPreRegistrationHandoffStatus/);
@@ -141,6 +193,18 @@ test('event registration config is strict and fail closed', () => {
   assert.equal(classifyPreRegistrationConfig({ schemaVersion: 1, enabled: true, capacity: 8, deadline: null, extra: true }).status, 'malformed');
   assert.equal(classifyPreRegistrationConfig({ enabled: true, capacity: 8, deadline: null, extra: true }).status, 'malformed');
   assert.equal(classifyPreRegistrationConfig({ schemaVersion: 3, enabled: true, capacity: 8, deadline: null }).status, 'malformed');
+});
+
+test('admin preregistration management requires Calendar admin and registration callable options', () => {
+  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const section = source.slice(
+    source.indexOf('export const adminManageTournamentPreRegistration'),
+    source.indexOf('export const createTournamentPreRegistrationHandoff'),
+  );
+  assert.match(section, /onCall\(callableOptions/);
+  assert.match(section, /requireCalendarAdmin\(request\)/);
+  assert.match(section, /functionService\(\)\.adminManage\(request\.data\)/);
+  assert.doesNotMatch(section, /managementToken|signInWithCustomToken|anonymous/i);
 });
 
 test('public management view supports active, waitlisted, and cancelled without persisting rank', () => {

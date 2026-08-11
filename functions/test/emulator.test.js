@@ -41,6 +41,19 @@ function payload(overrides = {}) {
   };
 }
 
+function adminUpdatePayload(registrationId, overrides = {}) {
+  return {
+    action: 'update',
+    calendarEventId: 'event-1',
+    registrationId,
+    playerName: 'Admin Updated Player',
+    officialId: 'admin-updated-official',
+    deckName: 'Admin Updated Deck',
+    honorId: 'admin-updated-honor',
+    ...overrides,
+  };
+}
+
 async function seedEvent(overrides = {}) {
   await db.doc(`${EVENT_ROOT}/event-1`).set({
     title: 'Test event',
@@ -708,6 +721,192 @@ integrationTest('IP rate limit counts failed management lookups', async () => {
     await assert.rejects(service.manage(request, '192.0.2.20'), /REGISTRATION_NOT_FOUND/);
   }
   await assert.rejects(service.manage(request, '192.0.2.20'), /RATE_LIMITED/);
+});
+
+integrationTest('admin updates all four active fields without changing status counts or identity authority', async () => {
+  await seedEvent();
+  const created = await service.submit(payload({
+    requestId: 'admin-active-update', officialId: 'active-old-official', honorId: 'active-old-honor',
+  }), '192.0.2.140');
+  const beforeCounts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  const result = await service.adminManage(adminUpdatePayload(created.registrationId));
+  assert.deepEqual({
+    playerName: result.playerName,
+    officialId: result.officialId,
+    deckName: result.deckName,
+    honorId: result.honorId,
+    status: result.status,
+  }, {
+    playerName: 'Admin Updated Player',
+    officialId: 'admin-updated-official',
+    deckName: 'Admin Updated Deck',
+    honorId: 'admin-updated-honor',
+    status: 'active',
+  });
+  const entry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${created.registrationId}`).get()).data();
+  const afterCounts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.equal(Object.hasOwn(entry, 'waitlistSequence'), false);
+  assert.deepEqual(
+    { activeCount: afterCounts.activeCount, waitlistedCount: afterCounts.waitlistedCount, nextWaitlistSequence: afterCounts.nextWaitlistSequence },
+    { activeCount: beforeCounts.activeCount, waitlistedCount: beforeCounts.waitlistedCount, nextWaitlistSequence: beforeCounts.nextWaitlistSequence },
+  );
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('official:ACTIVE-OLD-OFFICIAL')}`).get()).exists, false);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('honor:ACTIVE-OLD-HONOR')}`).get()).exists, false);
+  assert.ok(entry.identityHashes.includes(identityHash('official:ADMIN-UPDATED-OFFICIAL')));
+  assert.ok(entry.identityHashes.includes(identityHash('honor:ADMIN-UPDATED-HONOR')));
+});
+
+integrationTest('admin updates a waitlisted entry while preserving status sequence rank authority and counts', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'admin-wait-seat', officialId: 'seat-official' }), '192.0.2.141');
+  const waitlisted = await service.submit(payload({
+    requestId: 'admin-wait-entry', playerName: 'Wait', officialId: 'wait-old-official', honorId: 'wait-old-honor', allowWaitlist: true,
+  }), '192.0.2.142');
+  const before = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  const previousEntry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${waitlisted.registrationId}`).get()).data();
+  const result = await service.adminManage(adminUpdatePayload(waitlisted.registrationId, {
+    playerName: 'Wait Updated', officialId: 'wait-new-official', deckName: 'Wait Deck', honorId: 'wait-new-honor',
+  }));
+  const entry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${waitlisted.registrationId}`).get()).data();
+  const after = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.equal(result.status, 'waitlisted');
+  assert.equal(result.waitlistRank, 1);
+  assert.equal(entry.status, 'waitlisted');
+  assert.equal(entry.waitlistSequence, previousEntry.waitlistSequence);
+  assert.deepEqual(
+    { activeCount: after.activeCount, waitlistedCount: after.waitlistedCount, nextWaitlistSequence: after.nextWaitlistSequence },
+    { activeCount: before.activeCount, waitlistedCount: before.waitlistedCount, nextWaitlistSequence: before.nextWaitlistSequence },
+  );
+});
+
+integrationTest('admin deck-only update preserves every Official and Honor lock', async () => {
+  await seedEvent();
+  const created = await service.submit(payload({
+    requestId: 'admin-deck-only', officialId: 'deck-official', honorId: 'deck-honor', deckName: 'Old Deck',
+  }), '192.0.2.143');
+  const beforeLocks = (await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get()).docs.map((item) => item.id).sort();
+  await service.adminManage(adminUpdatePayload(created.registrationId, {
+    playerName: 'Player', officialId: 'deck-official', deckName: 'New Deck', honorId: 'deck-honor',
+  }));
+  const afterLocks = (await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get()).docs.map((item) => item.id).sort();
+  assert.deepEqual(afterLocks, beforeLocks);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/entries/${created.registrationId}`).get()).data().deckName, 'New Deck');
+});
+
+integrationTest('admin Official conflict rolls back the entry locks and counts with a safe specific error', async () => {
+  await seedEvent();
+  const first = await service.submit(payload({ requestId: 'admin-official-first', officialId: 'official-first', honorId: 'honor-first' }), '192.0.2.144');
+  const second = await service.submit(payload({ requestId: 'admin-official-second', officialId: 'official-owner', honorId: 'honor-owner' }), '192.0.2.145');
+  const beforeCounts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  const beforeLocks = (await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get()).docs.map((item) => item.id).sort();
+  await assert.rejects(
+    service.adminManage(adminUpdatePayload(first.registrationId, { officialId: 'OFFICIAL-OWNER', honorId: 'honor-first' })),
+    /OFFICIAL_ID_CONFLICT/,
+  );
+  const entry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${first.registrationId}`).get()).data();
+  const afterCounts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  const afterLocks = (await db.collection(`${PRIVATE_ROOT}/event-1/identities`).get()).docs.map((item) => item.id).sort();
+  assert.equal(entry.officialId, 'official-first');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('official:OFFICIAL-OWNER')}`).get()).data().registrationId, second.registrationId);
+  assert.deepEqual(afterLocks, beforeLocks);
+  assert.deepEqual({ active: afterCounts.activeCount, waitlisted: afterCounts.waitlistedCount }, { active: beforeCounts.activeCount, waitlisted: beforeCounts.waitlistedCount });
+});
+
+integrationTest('admin Honor conflicts span active and waitlisted entries and roll back atomically', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  const active = await service.submit(payload({ requestId: 'admin-honor-active', officialId: 'active-official', honorId: 'active-honor' }), '192.0.2.146');
+  const waitA = await service.submit(payload({ requestId: 'admin-honor-wait-a', playerName: 'Wait A', officialId: 'wait-a-official', honorId: 'wait-a-honor', allowWaitlist: true }), '192.0.2.147');
+  const waitB = await service.submit(payload({ requestId: 'admin-honor-wait-b', playerName: 'Wait B', officialId: 'wait-b-official', honorId: 'wait-b-honor', allowWaitlist: true }), '192.0.2.148');
+  await assert.rejects(
+    service.adminManage(adminUpdatePayload(active.registrationId, { officialId: 'active-official', honorId: 'WAIT-A-HONOR' })),
+    /HONOR_ID_CONFLICT/,
+  );
+  await assert.rejects(
+    service.adminManage(adminUpdatePayload(waitB.registrationId, { officialId: 'wait-b-official', honorId: 'WAIT-A-HONOR' })),
+    /HONOR_ID_CONFLICT/,
+  );
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/entries/${active.registrationId}`).get()).data().honorId, 'active-honor');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/entries/${waitB.registrationId}`).get()).data().honorId, 'wait-b-honor');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('honor:WAIT-A-HONOR')}`).get()).data().registrationId, waitA.registrationId);
+});
+
+integrationTest('admin cannot update cancelled entries and can update a legacy identityHash entry safely', async () => {
+  await seedEvent();
+  const created = await service.submit(payload({ requestId: 'admin-cancelled-update', officialId: 'cancelled-official' }), '192.0.2.149');
+  await service.adminManage({ action: 'cancel', calendarEventId: 'event-1', registrationId: created.registrationId });
+  await assert.rejects(service.adminManage(adminUpdatePayload(created.registrationId)), /REGISTRATION_NOT_ACTIVE/);
+
+  const registrationId = 'reg-admin-legacy';
+  const oldHash = identityHash('official:ADMIN-LEGACY-OFFICIAL');
+  await db.doc(`${PRIVATE_ROOT}/event-1`).set({ schemaVersion: 1, activeCount: 1 });
+  await db.doc(`${PRIVATE_ROOT}/event-1/entries/${registrationId}`).set({
+    schemaVersion: 1, registrationId, calendarEventId: 'event-1', status: 'active',
+    playerName: 'Legacy Admin', officialId: 'admin-legacy-official', deckName: '', honorId: '',
+    identityHash: oldHash, tokenHash: hashManagementToken(SECRET, 'Z'.repeat(43)),
+    createdAt: Timestamp.fromMillis(clock - 2), updatedAt: Timestamp.fromMillis(clock - 1),
+  });
+  await db.doc(`${PRIVATE_ROOT}/event-1/identities/${oldHash}`).set({
+    schemaVersion: 1, registrationId, status: 'active', updatedAt: Timestamp.fromMillis(clock - 1),
+  });
+  const updated = await service.adminManage(adminUpdatePayload(registrationId, {
+    playerName: 'Legacy Updated', officialId: 'admin-legacy-new', deckName: 'Legacy Deck', honorId: 'admin-legacy-honor',
+  }));
+  assert.equal(updated.playerName, 'Legacy Updated');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${oldHash}`).get()).exists, false);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/entries/${registrationId}`).get()).data().identityHashes.length, 2);
+});
+
+integrationTest('admin active cancellation decrements once releases locks and never promotes or mutates handoff fields', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  const active = await service.submit(payload({ requestId: 'admin-cancel-active', officialId: 'cancel-active-official', honorId: 'cancel-active-honor' }), '192.0.2.150');
+  const waitlisted = await service.submit(payload({ requestId: 'admin-cancel-active-wait', playerName: 'Wait', officialId: 'cancel-wait-official', honorId: 'cancel-wait-honor', allowWaitlist: true }), '192.0.2.151');
+  await db.doc(`${PRIVATE_ROOT}/event-1/entries/${active.registrationId}`).update({
+    importedTournamentId: 'swiss-existing', handoffRevision: 7,
+  });
+  await service.adminManage({ action: 'cancel', calendarEventId: 'event-1', registrationId: active.registrationId });
+  const activeEntry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${active.registrationId}`).get()).data();
+  const waitEntry = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${waitlisted.registrationId}`).get()).data();
+  const counts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.deepEqual({ activeCount: counts.activeCount, waitlistedCount: counts.waitlistedCount }, { activeCount: 0, waitlistedCount: 1 });
+  assert.equal(activeEntry.status, 'cancelled');
+  assert.equal(activeEntry.importedTournamentId, 'swiss-existing');
+  assert.equal(activeEntry.handoffRevision, 7);
+  assert.equal(Object.hasOwn(activeEntry, 'checkedIn'), false);
+  assert.equal(Object.hasOwn(activeEntry, 'promotedAt'), false);
+  assert.equal(waitEntry.status, 'waitlisted');
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('official:CANCEL-ACTIVE-OFFICIAL')}`).get()).exists, false);
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('honor:CANCEL-ACTIVE-HONOR')}`).get()).exists, false);
+});
+
+integrationTest('admin waitlisted cancellation preserves every sequence and shifts only derived rank', async () => {
+  await seedEvent({ preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null } });
+  await service.submit(payload({ requestId: 'admin-wait-cancel-seat', officialId: 'seat' }), '192.0.2.152');
+  const first = await service.submit(payload({ requestId: 'admin-wait-cancel-first', playerName: 'Wait 1', officialId: 'wait-one', allowWaitlist: true }), '192.0.2.153');
+  const second = await service.submit(payload({ requestId: 'admin-wait-cancel-second', playerName: 'Wait 2', officialId: 'wait-two', allowWaitlist: true }), '192.0.2.154');
+  const firstBefore = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${first.registrationId}`).get()).data();
+  const secondBefore = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${second.registrationId}`).get()).data();
+  const nextBefore = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data().nextWaitlistSequence;
+  await service.adminManage({ action: 'cancel', calendarEventId: 'event-1', registrationId: first.registrationId });
+  const firstAfter = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${first.registrationId}`).get()).data();
+  const secondAfter = (await db.doc(`${PRIVATE_ROOT}/event-1/entries/${second.registrationId}`).get()).data();
+  const counts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.equal(firstAfter.waitlistSequence, firstBefore.waitlistSequence);
+  assert.equal(secondAfter.waitlistSequence, secondBefore.waitlistSequence);
+  assert.equal(counts.nextWaitlistSequence, nextBefore);
+  assert.deepEqual({ activeCount: counts.activeCount, waitlistedCount: counts.waitlistedCount }, { activeCount: 1, waitlistedCount: 1 });
+  assert.equal((await db.doc(`${PRIVATE_ROOT}/event-1/identities/${identityHash('official:WAIT-ONE')}`).get()).exists, false);
+  const liveWaitlisted = await db.collection(`${PRIVATE_ROOT}/event-1/entries`).where('status', '==', 'waitlisted').get();
+  assert.deepEqual(liveWaitlisted.docs.map((item) => item.data().waitlistSequence), [secondBefore.waitlistSequence]);
+});
+
+integrationTest('admin repeated cancellation is idempotent and counters never become negative', async () => {
+  await seedEvent();
+  const created = await service.submit(payload({ requestId: 'admin-repeat-cancel', officialId: 'repeat-cancel' }), '192.0.2.155');
+  const cancel = { action: 'cancel', calendarEventId: 'event-1', registrationId: created.registrationId };
+  assert.equal((await service.adminManage(cancel)).status, 'cancelled');
+  assert.equal((await service.adminManage(cancel)).status, 'cancelled');
+  const counts = (await db.doc(`${PRIVATE_ROOT}/event-1`).get()).data();
+  assert.deepEqual({ activeCount: counts.activeCount, waitlistedCount: counts.waitlistedCount }, { activeCount: 0, waitlistedCount: 0 });
 });
 
 integrationTest('B2B create is private, deterministic, replayable, and stores no plaintext token', async () => {
