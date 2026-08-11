@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { getFunctions } from 'firebase/functions';
+import { GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
+import { auth, db, functions, isFirebaseEmulatorRuntime } from './firebaseRuntime.js';
+import { isLoopbackUrl } from './firebaseRuntimeConfig.js';
 import {
   DEFAULT_SWISS_APP_URL,
   buildSwissHandoffUrl,
@@ -37,31 +37,20 @@ import {
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
 // ==========================================
-const myFirebaseConfig = {
-  apiKey: "AIzaSyCaPWSmVV_R3zeGVeYj_g_AFu_JE-sGlpI",
-  authDomain: "kaijuzaocard-tournaments.firebaseapp.com",
-  projectId: "kaijuzaocard-tournaments",
-  storageBucket: "kaijuzaocard-tournaments.firebasestorage.app",
-  messagingSenderId: "950741417800",
-  appId: "1:950741417800:web:b8403334ab8be1641d7d7d",
-  measurementId: "G-3MY4BQGBVM"
-};
-
 const GAS_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbywkOTGBA5hh_vGfK2xHy2YE4uMnQNqbWrAHHtiB3wPoKWJJ9xu2IJqND-CqGHdu8d_/exec";
-
-const injectedFirebaseConfig = globalThis.__firebase_config;
-const firebaseConfig = injectedFirebaseConfig ? JSON.parse(injectedFirebaseConfig) : myFirebaseConfig;
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const functions = getFunctions(app, 'asia-east1');
 
 // 🔒 特助終極修復：精準抓取環境變數，過濾掉 _src 等後綴，完美對齊 Firebase 的安全權限要求！
 const rawAppId = globalThis.__app_id ? String(globalThis.__app_id) : 'kaijuzaocard-main';
 const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
 const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
-const swissAppUrl = import.meta.env.VITE_SWISS_APP_URL || DEFAULT_SWISS_APP_URL;
-const allowedSwissOrigins = parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl);
+const configuredSwissAppUrl = String(import.meta.env.VITE_SWISS_APP_URL || '').trim();
+const swissHandoffEnabled = !isFirebaseEmulatorRuntime || isLoopbackUrl(configuredSwissAppUrl);
+const swissAppUrl = isFirebaseEmulatorRuntime
+  ? (swissHandoffEnabled ? configuredSwissAppUrl : '')
+  : (configuredSwissAppUrl || DEFAULT_SWISS_APP_URL);
+const allowedSwissOrigins = swissAppUrl
+  ? parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl)
+  : new Set();
 
 const classifyTournamentSwissIntegration = (tournamentItem) => classifySwissIntegration(
   tournamentItem?.swissIntegration,
@@ -141,6 +130,7 @@ export default function App() {
   const [registrationEvent, setRegistrationEvent] = useState(null);
   const [adminRegistrationEvent, setAdminRegistrationEvent] = useState(null);
   const [showManagementDialog, setShowManagementDialog] = useState(() => Boolean(getManagementRoute()));
+  const [firebasePreviewFatalError, setFirebasePreviewFatalError] = useState('');
 
   const categoryScrollRef = useRef(null);
   const hasRandomizedBanner = useRef(false);
@@ -224,6 +214,10 @@ export default function App() {
   }, []);
 
   const handleSwissTournament = (tournamentItem) => {
+    if (!swissHandoffEnabled) {
+      showToast('Preview-only：Swiss 外部開啟已停用。');
+      return;
+    }
     if (!isAdminAuth) {
       showToast('此功能僅限已授權的 Google 管理員。');
       return;
@@ -330,6 +324,12 @@ export default function App() {
 
   const sendLineNotification = async (data, isTest = false) => {
     setIsSendingLine(true);
+
+    if (isFirebaseEmulatorRuntime) {
+      showToast('Preview-only：LINE／GAS 通知已停用。');
+      setIsSendingLine(false);
+      return { ok: false, errorCode: 'EMULATOR_EXTERNAL_NOTIFICATION_DISABLED' };
+    }
     
     const payloadData = isTest ? {
       name: "店長診斷測試",
@@ -384,6 +384,9 @@ export default function App() {
         }
       } catch (error) {
         console.error("Firebase 驗證失敗", error);
+        if (isFirebaseEmulatorRuntime) {
+          setFirebasePreviewFatalError(error?.code || 'AUTH_EMULATOR_UNAVAILABLE');
+        }
         setIsLoading(false); 
       }
     };
@@ -429,6 +432,9 @@ export default function App() {
         }, 
         (err) => {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
+          if (isFirebaseEmulatorRuntime) {
+            setFirebasePreviewFatalError(err?.code || 'FIRESTORE_EMULATOR_UNAVAILABLE');
+          }
           if (isFirstLoad) {
             isFirstLoad = false;
             checkAllLoaded(); 
@@ -510,10 +516,14 @@ export default function App() {
 
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
-      setIsLoading(false);
+      if (isFirebaseEmulatorRuntime && isLoading) {
+        setFirebasePreviewFatalError('EMULATOR_BOOTSTRAP_TIMEOUT');
+      } else {
+        setIsLoading(false);
+      }
     }, 6000);
     return () => clearTimeout(fallbackTimer);
-  }, []);
+  }, [isLoading]);
 
   useEffect(() => {
     if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
@@ -938,6 +948,17 @@ export default function App() {
 
   const weekHeaders = weekStartsOnMonday ? ['一','二','三','四','五','六','日'] : ['日','一','二','三','四','五','六'];
 
+  if (firebasePreviewFatalError) {
+    return (
+      <main data-testid="firebase-emulator-fatal" className="min-h-screen bg-orange-50 text-orange-950 grid place-items-center p-8">
+        <section className="max-w-2xl rounded-2xl border-2 border-orange-400 bg-white p-8 shadow-xl">
+          <h1 className="text-xl font-black">LOCAL FIREBASE EMULATOR PREVIEW FAILED</h1>
+          <p className="mt-3 font-mono text-sm break-all">Preview stopped safely: {firebasePreviewFatalError}</p>
+        </section>
+      </main>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-6">
@@ -961,6 +982,11 @@ export default function App() {
       </nav>
 
       <main className="max-w-6xl mx-auto p-4 space-y-6 mt-4 transition-all duration-300">
+        {isFirebaseEmulatorRuntime && !swissHandoffEnabled && (
+          <p className="rounded-xl border border-slate-300 bg-slate-100 p-3 text-sm font-bold text-slate-700">
+            Preview-only：Swiss 外部開啟與 Production 通知已停用。
+          </p>
+        )}
         {/* ========================================== */}
         {/* 玩家看版 (Player View) */}
         {/* ========================================== */}
@@ -1411,8 +1437,8 @@ export default function App() {
                   <div className="bg-green-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-lg md:text-xl flex items-center gap-2"><Send className="w-6 h-6" /> Google 試算表連動測試</span>
-                      <button onClick={() => sendLineNotification({}, true)} disabled={isSendingLine} className="bg-white text-green-700 px-4 py-2.5 rounded-xl text-sm shadow-sm hover:bg-green-50 active:scale-95 transition-all">
-                        {isSendingLine ? '診斷中...' : '發送測試通知'}
+                      <button onClick={() => sendLineNotification({}, true)} disabled={isSendingLine || isFirebaseEmulatorRuntime} className="bg-white text-green-700 px-4 py-2.5 rounded-xl text-sm shadow-sm hover:bg-green-50 active:scale-95 transition-all disabled:cursor-not-allowed disabled:opacity-60">
+                        {isFirebaseEmulatorRuntime ? 'Preview-only：通知停用' : (isSendingLine ? '診斷中...' : '發送測試通知')}
                       </button>
                     </div>
                     <p className="text-xs md:text-sm opacity-90 leading-relaxed font-bold">※ 點擊按鈕測試是否能將資料送達您綁定的 Google 試算表與 LINE 群組。</p>
@@ -1797,7 +1823,7 @@ export default function App() {
                                   <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
                                     <button
                                       type="button"
-                                      disabled={['preparing', 'clearing'].includes(swissStatuses[t.id]?.status) || classifyTournamentSwissIntegration(t).status === 'malformed'}
+                                      disabled={!swissHandoffEnabled || ['preparing', 'clearing'].includes(swissStatuses[t.id]?.status) || classifyTournamentSwissIntegration(t).status === 'malformed'}
                                       onClick={() => handleSwissTournament(t)}
                                       className="w-full px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-60"
                                     >

@@ -125,6 +125,9 @@ export default function PreRegistrationSwissImportControls({ event, entries, isA
     }
   };
 
+  if (!swissAppUrl) {
+    return <p className="mt-4 rounded-lg border border-slate-300 bg-slate-100 p-3 text-sm font-bold text-slate-700">Preview-only：Swiss 外部名單交接已停用。</p>;
+  }
   if (availability.status === 'unlinked') {
     return <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">請先建立或開啟瑞士制賽事，再匯入預報名名單。</p>;
   }

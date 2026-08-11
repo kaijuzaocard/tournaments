@@ -1,0 +1,45 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import {
+  B4A_BROWSER_ENV_FILE_CONTENT,
+  B4A_BROWSER_PROJECT_ID,
+  B4A_BROWSER_SECRET_FILE_CONTENT,
+  assertBrowserPreviewEnvironment,
+  browserPreviewPaths,
+} from './b4aBrowserPreviewConfig.js';
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const paths = browserPreviewPaths(projectRoot);
+assertBrowserPreviewEnvironment(process.env);
+
+function removeOwnedFile(file, expectedContent) {
+  if (!fs.existsSync(file)) return;
+  if (fs.readFileSync(file, 'utf8') !== expectedContent) {
+    throw new Error(`Refusing to remove a local file not created by the B4A preview harness: ${file}`);
+  }
+  fs.rmSync(file);
+}
+
+let dataCleanupError = null;
+if (!process.argv.includes('--files-only')) {
+  const requireFromFunctions = createRequire(path.join(projectRoot, 'functions', 'package.json'));
+  const { deleteApp, initializeApp } = requireFromFunctions('firebase-admin/app');
+  const { getFirestore } = requireFromFunctions('firebase-admin/firestore');
+  const app = initializeApp({ projectId: B4A_BROWSER_PROJECT_ID }, `b4a-browser-cleanup-${Date.now()}`);
+  try {
+    const db = getFirestore(app);
+    await db.recursiveDelete(db.collection('artifacts'));
+  } catch (error) {
+    dataCleanupError = error;
+  } finally {
+    await deleteApp(app);
+  }
+}
+
+fs.rmSync(paths.manifest, { force: true });
+removeOwnedFile(paths.secretOverride, B4A_BROWSER_SECRET_FILE_CONTENT);
+removeOwnedFile(paths.parameterOverride, B4A_BROWSER_ENV_FILE_CONTENT);
+console.log('B4A Browser Preview local files cleaned.');
+if (dataCleanupError) throw dataCleanupError;

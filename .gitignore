@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+/artifacts/b4a-p1/browser-preview-manifest.json
+/artifacts/b4a-p1/browser-preview-processes.json
 
 # Editor directories and files
 .vscode/*
