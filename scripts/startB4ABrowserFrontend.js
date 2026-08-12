@@ -4,6 +4,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readB4ABrowserBuildAttestation } from './b4aBrowserPreviewAttestation.js';
 import {
+  listeningB4ABrowserProcessIds,
+  verifyB4ABrowserFunctionsReadiness,
+} from './b4aBrowserFunctionsReadiness.js';
+import {
   B4A_BROWSER_PROJECT_ID,
   assertBrowserPreviewEnvironment,
   assertBrowserPreviewViteEnvironment,
@@ -14,6 +18,10 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const paths = browserPreviewPaths(projectRoot);
 assertBrowserPreviewEnvironment(process.env);
 assertBrowserPreviewViteEnvironment(process.env);
+await verifyB4ABrowserFunctionsReadiness({
+  paths,
+  listeningProcessIds: listeningB4ABrowserProcessIds,
+});
 readB4ABrowserBuildAttestation(paths.buildAttestation);
 const assets = path.join(projectRoot, 'dist', 'assets');
 if (!fs.existsSync(assets)) throw new Error('B4A_PREVIEW_EMULATOR_BUILD_REQUIRED');

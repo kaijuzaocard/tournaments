@@ -13,6 +13,8 @@ dist-ssr
 *.local
 /artifacts/b4a-p1/browser-preview-manifest.json
 /artifacts/b4a-p1/browser-preview-processes.json
+/artifacts/b4a-p1/browser-functions-readiness.json
+/artifacts/b4a-p1/browser-functions-emulator.log
 
 # Editor directories and files
 .vscode/*

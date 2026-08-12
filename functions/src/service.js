@@ -547,9 +547,9 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
 
   async function manage(rawPayload, rawIp) {
     try {
+      const payload = validateManagePayload(rawPayload);
       const ip = normalizeTrustedIp(rawIp);
       await consumeRateLimit({ scope: 'manage_ip', subject: ip, limit: 30, windowMs: 5 * 60 * 1000 });
-      const payload = validateManagePayload(rawPayload);
 
       return await db.runTransaction(async (transaction) => {
         const { reference, entry, policy } = await getVerifiedEntryAndEvent(transaction, payload);

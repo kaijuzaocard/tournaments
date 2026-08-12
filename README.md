@@ -51,28 +51,55 @@ Use Node 22 and Java 21. From the repository root, run these commands in order:
    npm run emulators:browser
    ```
 
-4. Seed the fictional E1-E6 fixtures in terminal B:
+   Port listeners are not readiness. The launcher fixes Firebase Functions
+   discovery to 60 seconds and uses the CLI's manifest-output discovery mode
+   so a transient Windows `localhost` admin-server fetch race cannot terminate
+   discovery before the module finishes loading. It tees the complete output into the ignored
+   harness log, rejects fatal discovery markers, and then sends six bounded
+   zero-write HTTP probes through the real loopback Functions endpoints. Do not
+   continue until terminal A prints exactly this readiness prefix:
+
+   ```text
+   B4A Browser Functions READY
+   ```
+
+4. In terminal B, revalidate the live session, listener ownership, exact
+   readiness attestation, fatal-marker-free log, unchanged Auth/Firestore
+   state, and all six Functions probes:
+
+   ```sh
+   npm run verify:browser:ready
+   ```
+
+   A JSON file alone is never sufficient; this command always performs a live
+   re-probe and prints `B4A Browser Functions readiness verified.` only after
+   it succeeds.
+
+5. Seed the fictional E1-E6 fixtures in terminal B:
 
    ```sh
    npm run seed:browser
    ```
 
-   The ignored manifest is written to
+   Seed startup runs the same live verifier before importing Auth fixtures or
+   calling the service-layer fixture builder. A service-layer seed cannot stand
+   in for Functions readiness. The ignored manifest is written to
    `artifacts/b4a-p1/browser-preview-manifest.json`. The seed also imports one
    fixed fictional Google-provider user into Auth Emulator. The manifest keeps
    only public fixture metadata; it contains no Firebase token, management
    token, credential, or HMAC secret.
 
-5. Start the fixed frontend in terminal C:
+6. Start the fixed frontend in terminal C:
 
    ```sh
    npm run preview:emulator
    ```
 
-   Preview startup refuses a missing, malformed, non-demo, or remote-endpoint
-   build attestation before starting Vite preview.
+   Preview startup first runs the same live Functions verifier, then refuses a
+   missing, malformed, non-demo, or remote-endpoint build attestation before
+   starting Vite preview. It never falls back to Production.
 
-6. Open `http://127.0.0.1:4174/`. Verify the
+7. Open `http://127.0.0.1:4174/`. Verify the
    `LOCAL FIREBASE EMULATOR PREVIEW` banner and the three loopback endpoints.
 
 ### Auth Emulator mock Google administrator
@@ -124,16 +151,40 @@ or bulk action. Event start and deadline policy remains authoritative.
 Keep the emulators running while cleaning data:
 
 1. Stop the frontend with Ctrl+C.
-2. Run `npm run cleanup:browser` in terminal B. It removes only the demo
+2. Save Browser evidence, then run `npm run cleanup:browser` in terminal B. It removes only the demo
    project's `artifacts` collection, only the fixed Auth Emulator fixture UID,
    the ignored manifest, and exact temporary files created by the harness. It
    is idempotent and may be run again; other Auth Emulator users are untouched.
-3. Run `npm run stop:browser` in terminal B. It uses the ignored process-state
-   manifest to request a clean shutdown and removes only recorded listeners on
-   the four fixed harness ports. The emulator terminal then exits.
+3. Run `npm run stop:browser` in terminal B. It validates the session-bound
+   ignored process state, requests a clean shutdown, and removes only recorded
+   listeners on the four fixed harness ports. It also removes readiness and
+   process state; a successful-session diagnostic log is removed, while a
+   failed-startup log remains available until explicit files cleanup. The
+   emulator terminal then exits.
 
 If the emulators already stopped, use `npm run cleanup:browser:files` to remove
 only harness-owned local files and the ignored manifest.
+
+After cleanup and stop, confirm that ports 4174, 4400, 5001, 8080, and 9099
+have no listeners and that `functions/.env.local`, `functions/.secret.local`,
+the readiness attestation, fixture manifest, and process state are gone. Only
+then run the isolated regression sequence:
+
+```sh
+npm test
+npm run test:functions
+node scripts/runPreRegistrationEmulatorTests.js
+node scripts/runRulesEmulatorTests.js
+npm run build
+npm run build:emulator
+npm run lint
+git diff --check
+```
+
+The independent Functions and Rules runners intentionally fail closed when the
+Browser harness still owns override files or fixed ports. They must not share
+the Browser emulator process; post-cleanup execution is the canonical isolated
+regression lifecycle.
 
 Emulator mode disables LINE/GAS notifications. Its Swiss handoff target and
 allowed origin are pinned to the loopback frontend so active-only selection can

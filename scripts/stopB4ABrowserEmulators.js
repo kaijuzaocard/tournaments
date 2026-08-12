@@ -1,45 +1,43 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  B4A_BROWSER_PROJECT_ID,
+  B4A_BROWSER_FUNCTIONS_PROJECT_ID,
+  listeningB4ABrowserProcessIds,
+  readB4ABrowserProcessState,
+} from './b4aBrowserFunctionsReadiness.js';
+import {
   assertBrowserPreviewEnvironment,
   browserPreviewPaths,
 } from './b4aBrowserPreviewConfig.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const paths = browserPreviewPaths(projectRoot);
-const expectedPorts = [4400, 5001, 8080, 9099];
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 assertBrowserPreviewEnvironment(process.env);
 
-function listeningProcessIds() {
-  if (process.platform !== 'win32') throw new Error('B4A_PREVIEW_STOP_REQUIRES_WINDOWS');
-  const output = execFileSync('netstat.exe', ['-ano'], { encoding: 'utf8' });
-  const result = {};
-  for (const line of output.split(/\r?\n/)) {
-    const match = line.match(/^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
-    if (!match) continue;
-    const port = Number(match[1]);
-    if (expectedPorts.includes(port)) result[port] = Number(match[2]);
-  }
-  return result;
-}
-
-const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const current = listeningProcessIds();
+const current = listeningB4ABrowserProcessIds();
 if (!fs.existsSync(paths.processState)) {
   if (!Object.keys(current).length) {
+    fs.rmSync(paths.functionsReadiness, { force: true });
+    if (fs.existsSync(paths.functionsLog)
+      && fs.readFileSync(paths.functionsLog, 'utf8').includes('B4A Browser Functions READY')) {
+      fs.rmSync(paths.functionsLog, { force: true });
+    }
     console.log('B4A Browser Preview emulators are already stopped.');
     process.exit(0);
   }
   throw new Error('Refusing to stop listeners without B4A preview process state.');
 }
 
-const state = JSON.parse(fs.readFileSync(paths.processState, 'utf8'));
-if (state.schemaVersion !== 1 || state.projectId !== B4A_BROWSER_PROJECT_ID
-  || !Number.isSafeInteger(state.launcherPid) || !state.processIdsByPort) {
+const state = readB4ABrowserProcessState(paths.processState, { requireAllPorts: false });
+if (state.projectId !== B4A_BROWSER_FUNCTIONS_PROJECT_ID) {
   throw new Error('B4A_PREVIEW_PROCESS_STATE_INVALID');
+}
+for (const [port, pid] of Object.entries(current)) {
+  if (state.processIdsByPort[port] !== pid) {
+    throw new Error(`Refusing to stop unrecorded listener on port ${port}.`);
+  }
 }
 
 try {
@@ -47,10 +45,10 @@ try {
 } catch (error) {
   if (error?.code !== 'ESRCH') throw error;
 }
-await wait(2500);
+await wait(2_500);
 
-const afterGracefulStop = listeningProcessIds();
-const recordedPids = new Set(Object.values(state.processIdsByPort).filter(Number.isSafeInteger));
+const afterGracefulStop = listeningB4ABrowserProcessIds();
+const recordedPids = new Set(Object.values(state.processIdsByPort));
 for (const [port, pid] of Object.entries(afterGracefulStop)) {
   if (!recordedPids.has(pid) || state.processIdsByPort[port] !== pid) {
     throw new Error(`Refusing to stop unrecorded listener on port ${port}.`);
@@ -62,7 +60,10 @@ for (const [port, pid] of Object.entries(afterGracefulStop)) {
   }
 }
 await wait(750);
-const remaining = listeningProcessIds();
-if (Object.keys(remaining).length) throw new Error('B4A_PREVIEW_LISTENER_CLEANUP_FAILED');
+if (Object.keys(listeningB4ABrowserProcessIds()).length) throw new Error('B4A_PREVIEW_LISTENER_CLEANUP_FAILED');
+const successfulLog = fs.existsSync(paths.functionsLog)
+  && fs.readFileSync(paths.functionsLog, 'utf8').includes('B4A Browser Functions READY');
+fs.rmSync(paths.functionsReadiness, { force: true });
 fs.rmSync(paths.processState, { force: true });
+if (successfulLog) fs.rmSync(paths.functionsLog, { force: true });
 console.log('B4A Browser Preview emulator listeners stopped.');

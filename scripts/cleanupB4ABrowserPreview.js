@@ -10,6 +10,7 @@ import {
   browserPreviewPaths,
 } from './b4aBrowserPreviewConfig.js';
 import { deleteB4APreviewAdminFixture } from './b4aBrowserPreviewAuthFixture.js';
+import { listeningB4ABrowserProcessIds } from './b4aBrowserFunctionsReadiness.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const paths = browserPreviewPaths(projectRoot);
@@ -46,7 +47,15 @@ if (!process.argv.includes('--files-only')) {
 }
 
 fs.rmSync(paths.manifest, { force: true });
+fs.rmSync(paths.functionsReadiness, { force: true });
 removeOwnedFile(paths.secretOverride, B4A_BROWSER_SECRET_FILE_CONTENT);
 removeOwnedFile(paths.parameterOverride, B4A_BROWSER_ENV_FILE_CONTENT);
+if (process.argv.includes('--files-only')) {
+  if (Object.keys(listeningB4ABrowserProcessIds()).length) {
+    throw new Error('B4A_PREVIEW_FILES_CLEANUP_REQUIRES_STOPPED_LISTENERS');
+  }
+  fs.rmSync(paths.processState, { force: true });
+  fs.rmSync(paths.functionsLog, { force: true });
+}
 console.log('B4A Browser Preview local files cleaned.');
 if (dataCleanupErrors.length) throw dataCleanupErrors[0];

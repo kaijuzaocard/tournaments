@@ -10,6 +10,10 @@ import {
 } from './b4aBrowserPreviewData.js';
 import { importB4APreviewAdminFixture } from './b4aBrowserPreviewAuthFixture.js';
 import {
+  listeningB4ABrowserProcessIds,
+  verifyB4ABrowserFunctionsReadiness,
+} from './b4aBrowserFunctionsReadiness.js';
+import {
   B4A_PREVIEW_ADMIN_MANAGEMENT_EVENT_ID,
   B4A_PREVIEW_ADMIN_MANAGEMENT_SWISS_ID,
   B4A_PREVIEW_ADMIN_PROBE_EVENT_ID,
@@ -31,6 +35,10 @@ const { getAuth } = requireFromFunctions('firebase-admin/auth');
 const { FieldValue, Timestamp, getFirestore } = requireFromFunctions('firebase-admin/firestore');
 const paths = browserPreviewPaths(projectRoot);
 assertBrowserPreviewEnvironment(process.env);
+await verifyB4ABrowserFunctionsReadiness({
+  paths,
+  listeningProcessIds: listeningB4ABrowserProcessIds,
+});
 
 const app = initializeApp({ projectId: B4A_BROWSER_PROJECT_ID }, `b4a-browser-seed-${Date.now()}`);
 const db = getFirestore(app);

@@ -258,6 +258,8 @@ test('the stop flow refuses unrecorded listeners and removes only recorded harne
   const stop = fs.readFileSync(new URL('../scripts/stopB4ABrowserEmulators.js', import.meta.url), 'utf8');
   assert.match(stop, /Refusing to stop listeners without B4A preview process state/);
   assert.match(stop, /Refusing to stop unrecorded listener/);
-  assert.match(stop, /state\.projectId !== B4A_BROWSER_PROJECT_ID/);
+  assert.match(stop, /readB4ABrowserProcessState\(paths\.processState, \{ requireAllPorts: false \}\)/);
+  assert.match(stop, /state\.projectId !== B4A_BROWSER_FUNCTIONS_PROJECT_ID/);
+  assert.match(stop, /process\.kill\(state\.launcherPid, 'SIGINT'\)/);
   assert.match(stop, /process\.kill\(pid, 'SIGTERM'\)/);
 });

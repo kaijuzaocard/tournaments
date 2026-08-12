@@ -2,15 +2,19 @@ import path from 'node:path';
 import {
   B4A_PREVIEW_ADMIN_FIXTURE,
   B4A_PREVIEW_AUTH_ENDPOINT,
-  B4A_PREVIEW_PROJECT_ID,
 } from '../src/b4aPreviewAdminFixture.js';
+import {
+  B4A_BROWSER_FUNCTIONS_DISCOVERY_TIMEOUT,
+  B4A_BROWSER_FUNCTIONS_ENDPOINT,
+  B4A_BROWSER_FUNCTIONS_PROJECT_ID,
+} from './b4aBrowserFunctionsReadiness.js';
 
-export const B4A_BROWSER_PROJECT_ID = B4A_PREVIEW_PROJECT_ID;
+export const B4A_BROWSER_PROJECT_ID = B4A_BROWSER_FUNCTIONS_PROJECT_ID;
 export const B4A_BROWSER_ADMIN_UID = B4A_PREVIEW_ADMIN_FIXTURE.uid;
 export const B4A_BROWSER_FRONTEND_ORIGIN = 'http://127.0.0.1:4174';
 export const B4A_BROWSER_AUTH_ENDPOINT = B4A_PREVIEW_AUTH_ENDPOINT;
 export const B4A_BROWSER_FIRESTORE_ENDPOINT = 'http://127.0.0.1:8080';
-export const B4A_BROWSER_FUNCTIONS_ENDPOINT = 'http://127.0.0.1:5001';
+export { B4A_BROWSER_FUNCTIONS_ENDPOINT };
 export const B4A_BROWSER_MANIFEST_RELATIVE_PATH = 'artifacts/b4a-p1/browser-preview-manifest.json';
 export const B4A_BROWSER_SECRET = 'emulator-only-b4a-browser-secret-0123456789';
 export const B4A_BROWSER_HANDOFF_SECRET = `${B4A_BROWSER_SECRET}-handoff`;
@@ -73,6 +77,8 @@ export function browserPreviewEnvironment(base = {}) {
     FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
     FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
     FUNCTIONS_EMULATOR_HOST: '127.0.0.1:5001',
+    FUNCTIONS_DISCOVERY_TIMEOUT: B4A_BROWSER_FUNCTIONS_DISCOVERY_TIMEOUT,
+    FIREBASE_FUNCTIONS_DISCOVERY_OUTPUT_PATH: 'true',
     METADATA_SERVER_DETECTION: 'none',
   };
 }
@@ -85,6 +91,8 @@ export function assertBrowserPreviewEnvironment(env = {}) {
     FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
     FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
     FUNCTIONS_EMULATOR_HOST: '127.0.0.1:5001',
+    FUNCTIONS_DISCOVERY_TIMEOUT: B4A_BROWSER_FUNCTIONS_DISCOVERY_TIMEOUT,
+    FIREBASE_FUNCTIONS_DISCOVERY_OUTPUT_PATH: 'true',
   };
   for (const [name, value] of Object.entries(expected)) {
     if (env[name] !== value) throw new Error(`B4A_PREVIEW_${name}_INVALID`);
@@ -108,6 +116,8 @@ export function browserPreviewPaths(projectRoot) {
     parameterOverride: path.join(projectRoot, 'functions', '.env.local'),
     manifest: path.join(projectRoot, ...B4A_BROWSER_MANIFEST_RELATIVE_PATH.split('/')),
     processState: path.join(projectRoot, 'artifacts', 'b4a-p1', 'browser-preview-processes.json'),
+    functionsReadiness: path.join(projectRoot, 'artifacts', 'b4a-p1', 'browser-functions-readiness.json'),
+    functionsLog: path.join(projectRoot, 'artifacts', 'b4a-p1', 'browser-functions-emulator.log'),
     buildAttestation: path.join(projectRoot, 'dist', 'b4a-emulator-build.json'),
   });
 }
