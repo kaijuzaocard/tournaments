@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
-import { collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { collection, documentId, onSnapshot, addDoc, deleteDoc, doc, getDoc, updateDoc, runTransaction, serverTimestamp, Timestamp, orderBy, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
@@ -34,6 +34,13 @@ import {
 } from './utils/preRegistration.js';
 import { getManagementRoute } from './utils/managementTokenBootstrap.js';
 import {
+  addCalendarDays,
+  chunkDocumentIds,
+  monthDateFromDateString,
+  publicCalendarRange,
+  taipeiDateString,
+} from './utils/calendarReadModel.js';
+import {
   PreRegistrationAdminDialog,
   PreRegistrationDialog,
   PreRegistrationPanel,
@@ -57,6 +64,13 @@ const swissAppUrl = isFirebaseEmulatorRuntime
 const allowedSwissOrigins = swissAppUrl
   ? parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl)
   : new Set();
+const INITIAL_PUBLIC_DATA_SOURCES = 6;
+
+const sortTournaments = (data) => data.sort((left, right) => (
+  String(left.date || '').localeCompare(String(right.date || ''))
+  || String(left.time || '').localeCompare(String(right.time || ''))
+  || String(left.id || '').localeCompare(String(right.id || ''))
+));
 const isB4APreviewAdminRuntime = import.meta.env.MODE === 'emulator'
   && isFirebaseEmulatorRuntime;
 const isB4AMobilePreviewViewport = isFirebaseEmulatorRuntime
@@ -69,8 +83,10 @@ const classifyTournamentSwissIntegration = (tournamentItem) => classifySwissInte
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [tournaments, setTournaments] = useState([]);
-  const [preRegistrationStats, setPreRegistrationStats] = useState({});
+  const [publicTournaments, setPublicTournaments] = useState([]);
+  const [adminTournaments, setAdminTournaments] = useState([]);
+  const [publicPreRegistrationStats, setPublicPreRegistrationStats] = useState({});
+  const [adminPreRegistrationStats, setAdminPreRegistrationStats] = useState({});
   const [currentView, setCurrentView] = useState('player'); 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -90,12 +106,13 @@ export default function App() {
 
   const [playerFilters, setPlayerFilters] = useState(['All']);
   const [viewMode, setViewMode] = useState('list'); 
-  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [taipeiToday, setTaipeiToday] = useState(() => taipeiDateString());
+  const [currentMonth, setCurrentMonth] = useState(() => monthDateFromDateString(taipeiDateString()));
   const [selectedDate, setSelectedDate] = useState(null);
 
   const [collapsedDates, setCollapsedDates] = useState({});
 
-  const [adminMonth, setAdminMonth] = useState(new Date());
+  const [adminMonth, setAdminMonth] = useState(() => monthDateFromDateString(taipeiDateString()));
   const [adminSelectedDate, setAdminSelectedDate] = useState(null);
   const [categories, setCategories] = useState([]);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -148,7 +165,29 @@ export default function App() {
   const pendingSwissRef = useRef(new Map());
   const swissPopupTimersRef = useRef(new Map());
   const swissClearInFlightRef = useRef(new Set());
+  const initialDataSourcesRef = useRef(new Set());
   const isAdminAuth = isFirebaseAdmin(user);
+  const isAdminWorkspace = currentView === 'admin' && isAdminAuth;
+  const tournaments = isAdminWorkspace ? adminTournaments : publicTournaments;
+  const preRegistrationStats = isAdminWorkspace
+    ? adminPreRegistrationStats
+    : publicPreRegistrationStats;
+  const publicDateRange = useMemo(() => publicCalendarRange({
+    viewMode,
+    taipeiToday,
+    currentMonth,
+  }), [viewMode, taipeiToday, currentMonth]);
+  const publicTournamentIdKey = useMemo(() => JSON.stringify(
+    publicTournaments.map((tournament) => tournament.id).filter(Boolean).sort(),
+  ), [publicTournaments]);
+  const markInitialDataSourceLoaded = useCallback((source) => {
+    const loaded = initialDataSourcesRef.current;
+    loaded.add(source);
+    if (loaded.size >= INITIAL_PUBLIC_DATA_SOURCES && !loaded.has('__complete__')) {
+      loaded.add('__complete__');
+      setTimeout(() => setIsLoading(false), 200);
+    }
+  }, []);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -222,6 +261,16 @@ export default function App() {
     swissPopupTimersRef.current.forEach((timer) => clearInterval(timer));
     swissPopupTimersRef.current.clear();
     pendingSwissRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTaipeiToday((current) => {
+        const next = taipeiDateString();
+        return current === next ? current : next;
+      });
+    }, 60_000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleSwissTournament = (tournamentItem) => {
@@ -320,7 +369,10 @@ export default function App() {
         currentUser: user,
         isAdminUser: isFirebaseAdmin,
       });
-      setTournaments((current) => current.map((item) => (
+      setAdminTournaments((current) => current.map((item) => (
+        item.id === tournamentItem.id ? removeSwissIntegrationKey(item) : item
+      )));
+      setPublicTournaments((current) => current.map((item) => (
         item.id === tournamentItem.id ? removeSwissIntegrationKey(item) : item
       )));
       setSwissStatus(tournamentItem.id, 'idle');
@@ -409,36 +461,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user || !db) return;
+    if (!user || !db) return undefined;
 
     const getCollection = (collectionName) => 
       collection(db, 'artifacts', appId, 'public', 'data', collectionName);
     
     const unsubs = [];
-    let loadedCount = 0;
-    const totalCollections = 6;
-
-    const checkAllLoaded = () => {
-      loadedCount++;
-      if (loadedCount >= totalCollections) {
-        setTimeout(() => setIsLoading(false), 200); 
-      }
-    };
-
-    const setupListener = (colRef, setter, sortFn = null) => {
+    const setupListener = (collectionName, setter, sortFn = null) => {
       let isFirstLoad = true;
-      const unsub = onSnapshot(colRef, { includeMetadataChanges: true },
+      const colRef = getCollection(collectionName);
+      const unsub = onSnapshot(colRef,
         (snapshot) => {
           let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           if (sortFn) data = sortFn(data);
           setter(data);
-          
-          if (isFirstLoad && !snapshot.metadata.fromCache) {
+          if (isFirstLoad) {
             isFirstLoad = false;
-            checkAllLoaded();
-          } else if (isFirstLoad && data.length > 0) {
-            isFirstLoad = false;
-            checkAllLoaded();
+            markInitialDataSourceLoaded(collectionName);
           }
         }, 
         (err) => {
@@ -448,18 +487,14 @@ export default function App() {
           }
           if (isFirstLoad) {
             isFirstLoad = false;
-            checkAllLoaded(); 
+            markInitialDataSourceLoaded(collectionName);
           }
         }
       );
       unsubs.push(unsub);
     };
 
-    setupListener(getCollection('monster_tournaments'), setTournaments, (data) => 
-      data.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`))
-    );
-
-    setupListener(getCollection('game_categories'), (data) => {
+    setupListener('game_categories', (data) => {
       setCategories(data);
       if (data.length > 0) {
         setReserveForm(prev => prev.gameType ? prev : { ...prev, gameType: data[0].gameType });
@@ -467,18 +502,105 @@ export default function App() {
       }
     });
 
-    setupListener(getCollection('tutorial_banners'), setTutorialBanners, (data) =>
+    setupListener('tutorial_banners', setTutorialBanners, (data) =>
       data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     );
 
-    setupListener(getCollection('store_closures'), setClosures); 
-    setupListener(getCollection('special_openings'), setSpecialOpenings);
-    setupListener(getCollection('tournamentPreRegistrationStats'), (data) => {
-      setPreRegistrationStats(Object.fromEntries(data.map((item) => [item.id, normalizePreRegistrationStats(item)])));
-    });
+    setupListener('store_closures', setClosures);
+    setupListener('special_openings', setSpecialOpenings);
 
     return () => unsubs.forEach(unsub => unsub());
-  }, [user]);
+  }, [user, markInitialDataSourceLoaded]);
+
+  useEffect(() => {
+    if (!user || isAdminWorkspace) return undefined;
+    const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
+    const publicTournamentQuery = query(
+      tournamentsRef,
+      where('date', '>=', publicDateRange.start),
+      where('date', '<=', publicDateRange.end),
+      orderBy('date', 'asc'),
+    );
+    let isFirstLoad = true;
+    const unsubscribe = onSnapshot(publicTournamentQuery, (snapshot) => {
+      setPublicTournaments(sortTournaments(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))));
+      if (isFirstLoad) {
+        isFirstLoad = false;
+        markInitialDataSourceLoaded('monster_tournaments');
+      }
+    }, (error) => {
+      console.error('讀取 public monster_tournaments 失敗:', error);
+      setPublicTournaments([]);
+      if (isFirstLoad) {
+        isFirstLoad = false;
+        markInitialDataSourceLoaded('monster_tournaments');
+      }
+    });
+    return unsubscribe;
+  }, [user, isAdminWorkspace, publicDateRange.start, publicDateRange.end, markInitialDataSourceLoaded]);
+
+  useEffect(() => {
+    if (!user || isAdminWorkspace) return undefined;
+    const eventIds = JSON.parse(publicTournamentIdKey);
+    const eventIdChunks = chunkDocumentIds(eventIds);
+    if (eventIdChunks.length === 0) {
+      setPublicPreRegistrationStats({});
+      markInitialDataSourceLoaded('tournamentPreRegistrationStats');
+      return undefined;
+    }
+
+    const statsRef = collection(db, 'artifacts', appId, 'public', 'data', 'tournamentPreRegistrationStats');
+    const chunkData = new Map();
+    const resolvedChunks = new Set();
+    const publish = () => setPublicPreRegistrationStats(Object.fromEntries(
+      [...chunkData.values()].flatMap((items) => items)
+        .map((item) => [item.id, normalizePreRegistrationStats(item)]),
+    ));
+    const settle = (chunkIndex, items) => {
+      chunkData.set(chunkIndex, items);
+      resolvedChunks.add(chunkIndex);
+      if (resolvedChunks.size === eventIdChunks.length) {
+        publish();
+        markInitialDataSourceLoaded('tournamentPreRegistrationStats');
+      }
+    };
+    const unsubs = eventIdChunks.map((eventIdChunk, chunkIndex) => onSnapshot(
+      query(statsRef, where(documentId(), 'in', eventIdChunk)),
+      (snapshot) => settle(chunkIndex, snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+      (error) => {
+        console.error('讀取 bounded tournamentPreRegistrationStats 失敗:', error);
+        settle(chunkIndex, []);
+      },
+    ));
+    return () => unsubs.forEach((unsubscribe) => unsubscribe());
+  }, [user, isAdminWorkspace, publicTournamentIdKey, markInitialDataSourceLoaded]);
+
+  useEffect(() => {
+    if (!user || !isAdminWorkspace) return undefined;
+    const getCollection = (collectionName) =>
+      collection(db, 'artifacts', appId, 'public', 'data', collectionName);
+    const setupListener = (colRef, setter, transform = (value) => value) => onSnapshot(
+      colRef,
+      (snapshot) => setter(transform(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))),
+      (error) => console.error(`讀取 Admin ${colRef.path} 失敗:`, error),
+    );
+    const unsubscribeTournaments = setupListener(
+      getCollection('monster_tournaments'),
+      setAdminTournaments,
+      sortTournaments,
+    );
+    const unsubscribeStats = setupListener(
+      getCollection('tournamentPreRegistrationStats'),
+      setAdminPreRegistrationStats,
+      (items) => Object.fromEntries(items.map((item) => [item.id, normalizePreRegistrationStats(item)])),
+    );
+    markInitialDataSourceLoaded('monster_tournaments');
+    markInitialDataSourceLoaded('tournamentPreRegistrationStats');
+    return () => {
+      unsubscribeTournaments();
+      unsubscribeStats();
+    };
+  }, [user, isAdminWorkspace, markInitialDataSourceLoaded]);
 
   useEffect(() => {
     if (!isAdminAuth) {
@@ -629,11 +751,19 @@ export default function App() {
         browserOrigin: globalThis.location?.origin,
         isAdminUser: isFirebaseAdmin,
         verifyAdminAuthority: async () => {
-          const probeEvent = tournaments.find((item) => item.id === B4A_PREVIEW_ADMIN_PROBE_EVENT_ID);
-          const handoffId = probeEvent?.browserPreviewAdminProbeHandoffId;
+          const probeSnapshot = await getDoc(doc(
+            db,
+            'artifacts',
+            appId,
+            'public',
+            'data',
+            'monster_tournaments',
+            B4A_PREVIEW_ADMIN_PROBE_EVENT_ID,
+          ));
+          const handoffId = probeSnapshot.data()?.browserPreviewAdminProbeHandoffId;
           if (!handoffId) return false;
           const getStatus = httpsCallable(functions, 'getTournamentPreRegistrationHandoffStatus');
-          const response = await getStatus({ handoffId, calendarEventId: probeEvent.id });
+          const response = await getStatus({ handoffId, calendarEventId: B4A_PREVIEW_ADMIN_PROBE_EVENT_ID });
           return response.data?.schemaVersion === 1
             && ['ready', 'claimed', 'completed', 'expired'].includes(response.data?.status);
         },
@@ -1071,23 +1201,16 @@ export default function App() {
             </div>
 
             {viewMode === 'list' && (() => {
-              const startOfToday = new Date();
-              startOfToday.setHours(0, 0, 0, 0);
-              const next = new Date(startOfToday); 
-              next.setDate(next.getDate() + 14);
-
               const list = tournaments.filter(t => { 
                 if (!t.date) return false;
-                const parts = t.date.split('-');
-                const d = new Date(parts[0], parts[1] - 1, parts[2]);
-                return d >= startOfToday && d <= next && (playerFilters.includes('All') || playerFilters.includes(t.gameType)); 
+                return t.date >= publicDateRange.start
+                  && t.date <= publicDateRange.end
+                  && (playerFilters.includes('All') || playerFilters.includes(t.gameType));
               });
               
               const upcomingClosures = [];
               for (let i = 0; i <= 14; i++) {
-                const checkDate = new Date(startOfToday);
-                checkDate.setDate(checkDate.getDate() + i);
-                const ds = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
+                const ds = addCalendarDays(publicDateRange.start, i);
                 const cObj = getClosureObj(ds);
                 if (cObj) {
                   upcomingClosures.push({ date: ds, reason: cObj.reason, isClosure: true });
@@ -1271,7 +1394,7 @@ export default function App() {
                     for (let d = 1; d <= dCount; d++) {
                       const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                       const events = tournaments.filter(t => t.date === ds && (playerFilters.includes('All') || playerFilters.includes(t.gameType)));
-                      const isToday = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
+                      const isToday = taipeiToday === ds;
                       const closureObj = getClosureObj(ds);
 
                       cells.push(
@@ -1742,7 +1865,7 @@ export default function App() {
                       for (let d = 1; d <= days; d++) {
                         const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const evs = tournaments.filter(t => t.date === ds);
-                        const isToday = ds === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` === ds;
+                        const isToday = taipeiToday === ds;
                         const closureObj = getClosureObj(ds);
 
                         cells.push(
