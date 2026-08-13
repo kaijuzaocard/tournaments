@@ -188,6 +188,10 @@ export default function App() {
       setTimeout(() => setIsLoading(false), 200);
     }
   }, []);
+  const changePublicCalendarMonth = useCallback((offset) => {
+    setSelectedDate(null);
+    setCurrentMonth((month) => new Date(month.getFullYear(), month.getMonth() + offset, 1));
+  }, []);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -1372,9 +1376,9 @@ export default function App() {
               <div className="bg-white rounded-2xl p-5 md:p-8 shadow-sm border border-gray-200">
                 <div className="flex justify-between items-center mb-6">
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-6 h-6"/></button>
+                    <button onClick={() => changePublicCalendarMonth(-1)} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronLeft className="w-6 h-6"/></button>
                     <h3 className="font-black text-xl text-gray-800 w-28 text-center">{currentMonth.getMonth()+1}月</h3>
-                    <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-6 h-6"/></button>
+                    <button onClick={() => changePublicCalendarMonth(1)} className="p-2 hover:bg-orange-50 rounded-full text-orange-600 transition-colors"><ChevronRight className="w-6 h-6"/></button>
                   </div>
                   <button onClick={() => setWeekStartsOnMonday(!weekStartsOnMonday)} className="text-xs md:text-sm font-bold text-gray-500 hover:text-orange-600 bg-gray-50 hover:bg-orange-50 px-4 py-2 rounded-lg border border-gray-200 transition-colors">改以「{weekStartsOnMonday ? '週日' : '週一'}」為起始</button>
                 </div>

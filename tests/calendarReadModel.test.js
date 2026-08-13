@@ -55,6 +55,18 @@ test('stats document IDs are unique sorted and split below the Firestore disjunc
   assert.deepEqual(chunkDocumentIds([]), []);
 });
 
+test('public month navigation clears the selected date before changing the bounded month', () => {
+  const app = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
+  const handler = app.match(/const changePublicCalendarMonth = useCallback\(\(offset\) => \{[\s\S]*?\n\s*\}, \[\]\);/)?.[0];
+  assert.ok(handler, 'public month navigation handler must remain explicit');
+  assert.ok(
+    handler.indexOf('setSelectedDate(null)') < handler.indexOf('setCurrentMonth((month)'),
+    'stale selectedDate must be cleared before the bounded month changes',
+  );
+  assert.match(app, /onClick=\{\(\) => changePublicCalendarMonth\(-1\)\}/);
+  assert.match(app, /onClick=\{\(\) => changePublicCalendarMonth\(1\)\}/);
+});
+
 test('frontend separates bounded public listeners from admin historical listeners', () => {
   const app = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
   assert.match(app, /where\('date',\s*'>=',\s*publicDateRange\.start\)/);
