@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { after, afterEach, before, describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import {
   assertFails,
   assertSucceeds,
@@ -10,11 +11,15 @@ import {
   collection,
   deleteDoc,
   doc,
+  documentId,
   getDoc,
   getDocs,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
-  updateDoc
+  updateDoc,
+  where
 } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-kaijuzaocard-calendar';
@@ -148,6 +153,31 @@ describe('public tournament collections', () => {
       doc(db, `${DATA_ROOT}/monster_tournaments/anonymous-admin-attempt`),
       { title: 'Denied' }
     ));
+  });
+
+  test('public bounded event and document-ID stats queries are allowed and exclude history', async () => {
+    await seed(`${DATA_ROOT}/monster_tournaments/history`, { title: 'History', date: '2026-07-01' });
+    await seed(`${DATA_ROOT}/monster_tournaments/current-a`, { title: 'Current A', date: '2026-08-14' });
+    await seed(`${DATA_ROOT}/monster_tournaments/current-b`, { title: 'Current B', date: '2026-08-28' });
+    await seed(`${DATA_ROOT}/monster_tournaments/future`, { title: 'Future', date: '2026-08-29' });
+    await seed(`${DATA_ROOT}/tournamentPreRegistrationStats/history`, { activeCount: 9, waitlistedCount: 9 });
+    await seed(`${DATA_ROOT}/tournamentPreRegistrationStats/current-a`, { activeCount: 1, waitlistedCount: 0 });
+    await seed(`${DATA_ROOT}/tournamentPreRegistrationStats/current-b`, { activeCount: 2, waitlistedCount: 1 });
+
+    const db = anonymousDb();
+    const events = await assertSucceeds(getDocs(query(
+      collection(db, `${DATA_ROOT}/monster_tournaments`),
+      where('date', '>=', '2026-08-14'),
+      where('date', '<=', '2026-08-28'),
+      orderBy('date', 'asc')
+    )));
+    assert.deepEqual(events.docs.map((item) => item.id), ['current-a', 'current-b']);
+
+    const stats = await assertSucceeds(getDocs(query(
+      collection(db, `${DATA_ROOT}/tournamentPreRegistrationStats`),
+      where(documentId(), 'in', events.docs.map((item) => item.id))
+    )));
+    assert.deepEqual(stats.docs.map((item) => item.id).sort(), ['current-a', 'current-b']);
   });
 });
 
