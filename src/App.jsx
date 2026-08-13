@@ -1,10 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { getFunctions } from 'firebase/functions';
+import { GoogleAuthProvider, signInWithCustomToken, signInWithPopup, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
+import { auth, db, firebaseRuntimeInfo, functions, isFirebaseEmulatorRuntime } from './firebaseRuntime.js';
+import { isLoopbackUrl } from './firebaseRuntimeConfig.js';
+import { B4A_PREVIEW_ADMIN_PROBE_EVENT_ID } from './b4aPreviewAdminFixture.js';
+import {
+  B4A_PREVIEW_ADMIN_IDENTITY_MISMATCH,
+  signInWithB4APreviewAdmin,
+} from './firebaseEmulatorAdminAuth.js';
 import {
   DEFAULT_SWISS_APP_URL,
   buildSwissHandoffUrl,
@@ -22,6 +28,7 @@ import {
 } from './utils/swissIntegration.js';
 import {
   formatTaipeiDateTimeLocal,
+  normalizePreRegistrationStats,
   normalizePreRegistrationSettings,
   preparePreRegistrationForWrite,
 } from './utils/preRegistration.js';
@@ -36,31 +43,24 @@ import {
 // ==========================================
 // Firebase 與 GAS 配置 (核心旗艦基底)
 // ==========================================
-const myFirebaseConfig = {
-  apiKey: "AIzaSyCaPWSmVV_R3zeGVeYj_g_AFu_JE-sGlpI",
-  authDomain: "kaijuzaocard-tournaments.firebaseapp.com",
-  projectId: "kaijuzaocard-tournaments",
-  storageBucket: "kaijuzaocard-tournaments.firebasestorage.app",
-  messagingSenderId: "950741417800",
-  appId: "1:950741417800:web:b8403334ab8be1641d7d7d",
-  measurementId: "G-3MY4BQGBVM"
-};
-
 const GAS_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbywkOTGBA5hh_vGfK2xHy2YE4uMnQNqbWrAHHtiB3wPoKWJJ9xu2IJqND-CqGHdu8d_/exec";
-
-const injectedFirebaseConfig = globalThis.__firebase_config;
-const firebaseConfig = injectedFirebaseConfig ? JSON.parse(injectedFirebaseConfig) : myFirebaseConfig;
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const functions = getFunctions(app, 'asia-east1');
 
 // 🔒 特助終極修復：精準抓取環境變數，過濾掉 _src 等後綴，完美對齊 Firebase 的安全權限要求！
 const rawAppId = globalThis.__app_id ? String(globalThis.__app_id) : 'kaijuzaocard-main';
 const appIdMatch = rawAppId.match(/^c_[a-f0-9]+/i);
 const appId = appIdMatch ? appIdMatch[0] : 'kaijuzaocard-main';
-const swissAppUrl = import.meta.env.VITE_SWISS_APP_URL || DEFAULT_SWISS_APP_URL;
-const allowedSwissOrigins = parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl);
+const configuredSwissAppUrl = String(import.meta.env.VITE_SWISS_APP_URL || '').trim();
+const swissHandoffEnabled = !isFirebaseEmulatorRuntime || isLoopbackUrl(configuredSwissAppUrl);
+const swissAppUrl = isFirebaseEmulatorRuntime
+  ? (swissHandoffEnabled ? configuredSwissAppUrl : '')
+  : (configuredSwissAppUrl || DEFAULT_SWISS_APP_URL);
+const allowedSwissOrigins = swissAppUrl
+  ? parseAllowedOrigins(import.meta.env.VITE_SWISS_ALLOWED_ORIGINS, swissAppUrl)
+  : new Set();
+const isB4APreviewAdminRuntime = import.meta.env.MODE === 'emulator'
+  && isFirebaseEmulatorRuntime;
+const isB4AMobilePreviewViewport = isFirebaseEmulatorRuntime
+  && new URLSearchParams(globalThis.location?.search || '').get('b4aViewport') === '375x812';
 
 const classifyTournamentSwissIntegration = (tournamentItem) => classifySwissIntegration(
   tournamentItem?.swissIntegration,
@@ -85,6 +85,7 @@ export default function App() {
 
   const [isAdminSigningIn, setIsAdminSigningIn] = useState(false);
   const [adminLoginError, setAdminLoginError] = useState('');
+  const [previewAdminProof, setPreviewAdminProof] = useState(null);
   const [weekStartsOnMonday, setWeekStartsOnMonday] = useState(false);
 
   const [playerFilters, setPlayerFilters] = useState(['All']);
@@ -123,7 +124,7 @@ export default function App() {
   const [formData, setFormData] = useState({
     gameType: '', title: '', fee: '', entryFee: '', capacity: 0,
     suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [],
-    preRegistration: { schemaVersion: 1, enabled: false, capacity: 0, deadline: null },
+    preRegistration: { schemaVersion: 2, enabled: false, waitlistEnabled: false, capacity: 0, deadline: null },
   });
   const [schedules, setSchedules] = useState([{ date: '', time: '19:00' }]);
 
@@ -140,6 +141,7 @@ export default function App() {
   const [registrationEvent, setRegistrationEvent] = useState(null);
   const [adminRegistrationEvent, setAdminRegistrationEvent] = useState(null);
   const [showManagementDialog, setShowManagementDialog] = useState(() => Boolean(getManagementRoute()));
+  const [firebasePreviewFatalError, setFirebasePreviewFatalError] = useState('');
 
   const categoryScrollRef = useRef(null);
   const hasRandomizedBanner = useRef(false);
@@ -223,6 +225,10 @@ export default function App() {
   }, []);
 
   const handleSwissTournament = (tournamentItem) => {
+    if (!swissHandoffEnabled) {
+      showToast('Preview-only：Swiss 外部開啟已停用。');
+      return;
+    }
     if (!isAdminAuth) {
       showToast('此功能僅限已授權的 Google 管理員。');
       return;
@@ -329,6 +335,12 @@ export default function App() {
 
   const sendLineNotification = async (data, isTest = false) => {
     setIsSendingLine(true);
+
+    if (isFirebaseEmulatorRuntime) {
+      showToast('Preview-only：LINE／GAS 通知已停用。');
+      setIsSendingLine(false);
+      return { ok: false, errorCode: 'EMULATOR_EXTERNAL_NOTIFICATION_DISABLED' };
+    }
     
     const payloadData = isTest ? {
       name: "店長診斷測試",
@@ -366,7 +378,7 @@ export default function App() {
       setLoadingMsgIdx(prev => (prev + 1) % loadingMessages.length);
     }, 800);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadingMessages.length]);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -383,6 +395,9 @@ export default function App() {
         }
       } catch (error) {
         console.error("Firebase 驗證失敗", error);
+        if (isFirebaseEmulatorRuntime) {
+          setFirebasePreviewFatalError(error?.code || 'AUTH_EMULATOR_UNAVAILABLE');
+        }
         setIsLoading(false); 
       }
     };
@@ -428,6 +443,9 @@ export default function App() {
         }, 
         (err) => {
           console.error(`讀取 ${colRef.path} 失敗:`, err);
+          if (isFirebaseEmulatorRuntime) {
+            setFirebasePreviewFatalError(err?.code || 'FIRESTORE_EMULATOR_UNAVAILABLE');
+          }
           if (isFirstLoad) {
             isFirstLoad = false;
             checkAllLoaded(); 
@@ -456,7 +474,7 @@ export default function App() {
     setupListener(getCollection('store_closures'), setClosures); 
     setupListener(getCollection('special_openings'), setSpecialOpenings);
     setupListener(getCollection('tournamentPreRegistrationStats'), (data) => {
-      setPreRegistrationStats(Object.fromEntries(data.map((item) => [item.id, item.activeCount])));
+      setPreRegistrationStats(Object.fromEntries(data.map((item) => [item.id, normalizePreRegistrationStats(item)])));
     });
 
     return () => unsubs.forEach(unsub => unsub());
@@ -509,10 +527,14 @@ export default function App() {
 
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
-      setIsLoading(false);
+      if (isFirebaseEmulatorRuntime && isLoading) {
+        setFirebasePreviewFatalError('EMULATOR_BOOTSTRAP_TIMEOUT');
+      } else {
+        setIsLoading(false);
+      }
     }, 6000);
     return () => clearTimeout(fallbackTimer);
-  }, []);
+  }, [isLoading]);
 
   useEffect(() => {
     if (tutorialBanners.length > 0 && !hasRandomizedBanner.current) {
@@ -595,8 +617,38 @@ export default function App() {
     }
   };
 
+  const handlePreviewAdminLogin = async () => {
+    setIsAdminSigningIn(true);
+    setAdminLoginError('');
+    setPreviewAdminProof(null);
+    try {
+      const proof = await signInWithB4APreviewAdmin({
+        auth,
+        isFirebaseEmulatorRuntime,
+        runtimeInfo: firebaseRuntimeInfo,
+        browserOrigin: globalThis.location?.origin,
+        isAdminUser: isFirebaseAdmin,
+        verifyAdminAuthority: async () => {
+          const probeEvent = tournaments.find((item) => item.id === B4A_PREVIEW_ADMIN_PROBE_EVENT_ID);
+          const handoffId = probeEvent?.browserPreviewAdminProbeHandoffId;
+          if (!handoffId) return false;
+          const getStatus = httpsCallable(functions, 'getTournamentPreRegistrationHandoffStatus');
+          const response = await getStatus({ handoffId, calendarEventId: probeEvent.id });
+          return response.data?.schemaVersion === 1
+            && ['ready', 'claimed', 'completed', 'expired'].includes(response.data?.status);
+        },
+      });
+      setPreviewAdminProof(proof);
+    } catch {
+      setAdminLoginError(B4A_PREVIEW_ADMIN_IDENTITY_MISMATCH);
+    } finally {
+      setIsAdminSigningIn(false);
+    }
+  };
+
   const handleAdminLogout = async () => {
     setAdminLoginError('');
+    setPreviewAdminProof(null);
     try {
       await signOut(auth);
       await signInAnonymously(auth);
@@ -640,7 +692,7 @@ export default function App() {
       const tournamentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments');
       const promises = validSchedules.map(sch => addDoc(tournamentsRef, { ...normalizedForm, date: sch.date, time: sch.time, createdAt: new Date().toISOString(), createdBy: user.uid }));
       await Promise.all(promises);
-      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [], preRegistration: { schemaVersion: 1, enabled: false, capacity: 0, deadline: null } });
+      setFormData({ ...formData, title: '', fee: '', entryFee: '', capacity: 0, suggestedRounds: 0, suggestedTopCut: 0, description: '', images: [], prizeImages: [], preRegistration: { schemaVersion: 2, enabled: false, waitlistEnabled: false, capacity: 0, deadline: null } });
       setSchedules([{ date: '', time: '19:00' }]);
       showToast('✅ 賽事已成功發布！');
     } catch (err) {
@@ -671,6 +723,19 @@ export default function App() {
       showToast('✅ 賽事內容已更新！');
     } catch (error) {
       console.error("Error updating document: ", error);
+    }
+  };
+
+  const handleDeleteTournament = async (tournamentId) => {
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', tournamentId));
+      showToast('賽事已刪除。');
+    } catch (error) {
+      const code = error?.code || error?.message || 'DELETE_FAILED';
+      console.error('刪除賽事失敗:', { code });
+      showToast(code === 'permission-denied'
+        ? '此賽事已有預報名紀錄，為避免留下私人孤兒資料，禁止直接刪除。'
+        : `刪除賽事失敗（${code}）。`);
     }
   };
 
@@ -924,6 +989,17 @@ export default function App() {
 
   const weekHeaders = weekStartsOnMonday ? ['一','二','三','四','五','六','日'] : ['日','一','二','三','四','五','六'];
 
+  if (firebasePreviewFatalError) {
+    return (
+      <main data-testid="firebase-emulator-fatal" className="min-h-screen bg-orange-50 text-orange-950 grid place-items-center p-8">
+        <section className="max-w-2xl rounded-2xl border-2 border-orange-400 bg-white p-8 shadow-xl">
+          <h1 className="text-xl font-black">LOCAL FIREBASE EMULATOR PREVIEW FAILED</h1>
+          <p className="mt-3 font-mono text-sm break-all">Preview stopped safely: {firebasePreviewFatalError}</p>
+        </section>
+      </main>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-6">
@@ -935,7 +1011,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 font-sans pb-12 relative">
+    <div data-b4a-mobile-viewport={isB4AMobilePreviewViewport ? '375x812' : undefined} className={`bg-gray-100 font-sans pb-12 relative ${isB4AMobilePreviewViewport ? 'fixed left-0 top-0 w-[375px] h-[812px] min-h-0 overflow-y-auto overflow-x-hidden' : 'min-h-screen'}`}>
       <nav className="bg-orange-600 text-white shadow-lg sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center transition-all duration-300">
           <div className="flex items-center gap-2 font-black text-xl tracking-wider cursor-pointer" onClick={() => window.location.reload()}><Store className="w-6 h-6" /> 怪獸造咔</div>
@@ -947,6 +1023,11 @@ export default function App() {
       </nav>
 
       <main className="max-w-6xl mx-auto p-4 space-y-6 mt-4 transition-all duration-300">
+        {isFirebaseEmulatorRuntime && !swissHandoffEnabled && (
+          <p className="rounded-xl border border-slate-300 bg-slate-100 p-3 text-sm font-bold text-slate-700">
+            Preview-only：Swiss 外部開啟與 Production 通知已停用。
+          </p>
+        )}
         {/* ========================================== */}
         {/* 玩家看版 (Player View) */}
         {/* ========================================== */}
@@ -973,7 +1054,7 @@ export default function App() {
                   點擊下方標籤，可「多選」篩選想看的遊戲喔！
                 </div>
 
-                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink-0">
+                <button onClick={() => document.getElementById('tutorial-section')?.scrollIntoView({ behavior: 'smooth' })} className="w-full md:w-auto max-w-full whitespace-normal text-base md:text-lg font-black text-white bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 px-6 py-3.5 md:py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all shrink">
                   🎓 點我快速預約【新手教學】 👉
                 </button>
               </div>
@@ -1105,7 +1186,7 @@ export default function App() {
                                       <div className="flex-1 min-w-0 py-1">
                                         <div className="flex items-center flex-wrap gap-2 mb-1.5 md:mb-2">
                                           <GameBadge type={t.gameType} />
-                                          <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500"/>方案：{t.fee}</span>
+                                          <span className="max-w-full break-words text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink"><Zap className="w-3 h-3 md:w-4 md:h-4 text-yellow-500 shrink-0"/>方案：{t.fee}</span>
                                         </div>
                                         <h4 className="font-black text-gray-800 text-base md:text-xl leading-snug break-words pr-2">{t.title}</h4>
                                       </div>
@@ -1146,7 +1227,7 @@ export default function App() {
                                               </div>
                                             </div>
                                           )}
-                                          <PreRegistrationPanel event={t} activeCount={preRegistrationStats[t.id] ?? 0} onRegister={setRegistrationEvent} />
+                                          <PreRegistrationPanel event={t} stats={preRegistrationStats[t.id]} onRegister={setRegistrationEvent} />
                                         </div>
                                       </div>
                                     )}
@@ -1238,7 +1319,7 @@ export default function App() {
                                 <div className="flex-1">
                                   <div className="mb-1.5 flex items-center gap-2">
                                     <GameBadge type={t.gameType} />
-                                    <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink-0"><Zap className="w-3 h-3 text-yellow-500"/>方案：{t.fee}</span>
+                                    <span className="max-w-full break-words text-[11px] sm:text-xs md:text-sm font-bold text-gray-500 bg-gray-100 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded flex items-center gap-1 shrink"><Zap className="w-3 h-3 text-yellow-500 shrink-0"/>方案：{t.fee}</span>
                                   </div>
                                   <h4 className="font-black text-gray-800 text-lg md:text-xl leading-tight">{t.title}</h4>
                                 </div>
@@ -1251,7 +1332,7 @@ export default function App() {
                               )}
                             </div>
 
-                            <PreRegistrationPanel event={t} activeCount={preRegistrationStats[t.id] ?? 0} onRegister={setRegistrationEvent} />
+                            <PreRegistrationPanel event={t} stats={preRegistrationStats[t.id]} onRegister={setRegistrationEvent} />
 
                             {expandedNotes[t.id] && (
                               <div className="mt-4 pt-4 border-t border-gray-100 animate-in slide-in-from-top-2 duration-300">
@@ -1380,9 +1461,18 @@ export default function App() {
 
                 {adminLoginError && <p className="text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-sm font-bold break-words">{adminLoginError}</p>}
 
-                <button type="button" onClick={handleAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
-                  {isAdminSigningIn ? 'Google 登入中...' : '使用 Google 管理員帳號登入'}
-                </button>
+                {isB4APreviewAdminRuntime ? (
+                  <div className="space-y-3">
+                    <p className="text-xs font-black text-indigo-700">Preview-only · Google mock identity</p>
+                    <button type="button" onClick={handlePreviewAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-indigo-700 text-white text-lg font-black rounded-xl shadow-md hover:bg-indigo-800 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
+                      {isAdminSigningIn ? '本機測試管理員登入中...' : '使用本機測試管理員登入'}
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={handleAdminLogin} disabled={isAdminSigningIn} className="w-full py-4 bg-orange-600 text-white text-lg font-black rounded-xl shadow-md hover:bg-orange-700 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed">
+                    {isAdminSigningIn ? 'Google 登入中...' : '使用 Google 管理員帳號登入'}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
@@ -1392,13 +1482,22 @@ export default function App() {
                     <LogOut className="w-5 h-5 md:w-6 md:h-6" /> <span className="hidden md:inline">登出</span>
                   </button>
                 </div>
+                {isB4APreviewAdminRuntime && previewAdminProof && (
+                  <div data-b4a-preview-admin-proof className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-sm font-bold text-indigo-900 break-all">
+                    <p className="font-black">Preview-only · Google mock identity 已驗證</p>
+                    <p className="mt-1">UID：{previewAdminProof.uid}</p>
+                    <p>Anonymous：{String(previewAdminProof.isAnonymous)}</p>
+                    <p>Provider：{previewAdminProof.providerId} · token sign-in provider：{previewAdminProof.signInProvider}</p>
+                    <p>Functions requireCalendarAdmin：{previewAdminProof.functionsAdminCallable}</p>
+                  </div>
+                )}
                 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div className="bg-green-600 text-white p-6 rounded-2xl shadow-md font-black flex flex-col justify-between h-full">
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-lg md:text-xl flex items-center gap-2"><Send className="w-6 h-6" /> Google 試算表連動測試</span>
-                      <button onClick={() => sendLineNotification({}, true)} disabled={isSendingLine} className="bg-white text-green-700 px-4 py-2.5 rounded-xl text-sm shadow-sm hover:bg-green-50 active:scale-95 transition-all">
-                        {isSendingLine ? '診斷中...' : '發送測試通知'}
+                      <button onClick={() => sendLineNotification({}, true)} disabled={isSendingLine || isFirebaseEmulatorRuntime} className="bg-white text-green-700 px-4 py-2.5 rounded-xl text-sm shadow-sm hover:bg-green-50 active:scale-95 transition-all disabled:cursor-not-allowed disabled:opacity-60">
+                        {isFirebaseEmulatorRuntime ? 'Preview-only：通知停用' : (isSendingLine ? '診斷中...' : '發送測試通知')}
                       </button>
                     </div>
                     <p className="text-xs md:text-sm opacity-90 leading-relaxed font-bold">※ 點擊按鈕測試是否能將資料送達您綁定的 Google 試算表與 LINE 群組。</p>
@@ -1435,8 +1534,9 @@ export default function App() {
                                 setFormData({
                                   ...formData,
                                   preRegistration: {
-                                    schemaVersion: 1,
+                                    schemaVersion: 2,
                                     enabled: e.target.checked,
+                                    waitlistEnabled: formData.preRegistration?.waitlistEnabled === true,
                                     capacity: formData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''),
                                     deadline: formData.preRegistration?.deadline ?? null,
                                   },
@@ -1449,6 +1549,7 @@ export default function App() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <label className="text-sm font-bold text-gray-700">預報名人數上限<input required type="number" min="1" max="256" step="1" value={formData.preRegistration.capacity} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label>
                               <label className="text-sm font-bold text-gray-700">預報名截止時間（選填）<input type="datetime-local" value={formData.preRegistration.deadline || ''} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /><span className="block mt-1 text-xs text-gray-500">Asia/Taipei</span></label>
+                              <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-black text-amber-900"><input type="checkbox" checked={formData.preRegistration.waitlistEnabled === true} onChange={(e) => setFormData({ ...formData, preRegistration: { ...formData.preRegistration, waitlistEnabled: e.target.checked } })} className="mt-0.5 w-5 h-5 accent-amber-600" /><span>正取額滿時開放玩家主動加入候補<span className="block mt-1 text-xs font-bold text-amber-700">本階段不會自動補位或通知。</span></span></label>
                             </div>
                           )}
                         </div>
@@ -1715,8 +1816,8 @@ export default function App() {
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label className="text-xs font-bold text-orange-800 block mb-1.5">人數上限</label><input type="number" min="0" step="1" value={editFormData.capacity ?? 0} onChange={(e) => setEditFormData({...editFormData, capacity: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議瑞士輪數</label><input type="number" min="0" max="50" step="1" value={editFormData.suggestedRounds ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedRounds: e.target.value})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white" /></div><div><label className="text-xs font-bold text-orange-800 block mb-1.5">建議 Top Cut</label><select value={editFormData.suggestedTopCut ?? 0} onChange={(e) => setEditFormData({...editFormData, suggestedTopCut: Number(e.target.value)})} className="w-full p-3 border border-orange-200 rounded-xl text-sm font-bold bg-white"><option value={0}>不預設</option><option value={2}>Top 2</option><option value={4}>Top 4</option><option value={8}>Top 8</option><option value={16}>Top 16</option></select></div></div>
 
                                 <div className="border border-emerald-200 bg-emerald-50 p-4 rounded-xl space-y-3">
-                                  <label className="flex items-center justify-between gap-4 text-sm font-black text-emerald-900"><span>開放賽事預報名</span><input type="checkbox" checked={editFormData.preRegistration?.enabled === true} onChange={(e) => { const fallback = Number(editFormData.capacity); setEditFormData({ ...editFormData, preRegistration: { schemaVersion: 1, enabled: e.target.checked, capacity: editFormData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''), deadline: editFormData.preRegistration?.deadline ?? null } }); }} className="w-5 h-5 accent-emerald-600" /></label>
-                                  {(editFormData.preRegistration?.enabled || editFormData.preRegistration?.capacity) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs font-bold text-gray-700">預報名人數上限<input required={editFormData.preRegistration?.enabled} type="number" min="1" max="256" step="1" value={editFormData.preRegistration?.capacity || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label><label className="text-xs font-bold text-gray-700">截止時間（Asia/Taipei）<input type="datetime-local" value={editFormData.preRegistration?.deadline || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label></div>}
+                                  <label className="flex items-center justify-between gap-4 text-sm font-black text-emerald-900"><span>開放賽事預報名</span><input type="checkbox" checked={editFormData.preRegistration?.enabled === true} onChange={(e) => { const fallback = Number(editFormData.capacity); setEditFormData({ ...editFormData, preRegistration: { schemaVersion: 2, enabled: e.target.checked, waitlistEnabled: editFormData.preRegistration?.waitlistEnabled === true, capacity: editFormData.preRegistration?.capacity || (Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 256 ? fallback : ''), deadline: editFormData.preRegistration?.deadline ?? null } }); }} className="w-5 h-5 accent-emerald-600" /></label>
+                                  {(editFormData.preRegistration?.enabled || editFormData.preRegistration?.capacity) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs font-bold text-gray-700">預報名人數上限<input required={editFormData.preRegistration?.enabled} type="number" min="1" max="256" step="1" value={editFormData.preRegistration?.capacity || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, capacity: e.target.value } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label><label className="text-xs font-bold text-gray-700">截止時間（Asia/Taipei）<input type="datetime-local" value={editFormData.preRegistration?.deadline || ''} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, deadline: e.target.value || null } })} className="mt-1 w-full p-3 border border-emerald-200 rounded-lg bg-white" /></label>{editFormData.preRegistration?.enabled && <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-black text-amber-900"><input type="checkbox" checked={editFormData.preRegistration?.waitlistEnabled === true} onChange={(e) => setEditFormData({ ...editFormData, preRegistration: { ...editFormData.preRegistration, waitlistEnabled: e.target.checked } })} className="mt-0.5 w-5 h-5 accent-amber-600" /><span>正取額滿時開放玩家主動加入候補<span className="block mt-1 font-bold text-amber-700">本階段不會自動補位或通知。</span></span></label>}</div>}
                                 </div>
                                 
                                 <div>
@@ -1781,7 +1882,7 @@ export default function App() {
                                   <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
                                     <button
                                       type="button"
-                                      disabled={['preparing', 'clearing'].includes(swissStatuses[t.id]?.status) || classifyTournamentSwissIntegration(t).status === 'malformed'}
+                                      disabled={!swissHandoffEnabled || ['preparing', 'clearing'].includes(swissStatuses[t.id]?.status) || classifyTournamentSwissIntegration(t).status === 'malformed'}
                                       onClick={() => handleSwissTournament(t)}
                                       className="w-full px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-60"
                                     >
@@ -1814,9 +1915,9 @@ export default function App() {
                                     {swissStatuses[t.id]?.error && <p role="alert" className="mt-2 text-xs font-bold text-rose-700">{swissStatuses[t.id].error}</p>}
                                   </div>
                                 )}
-                                {isAdminAuth && (t.preRegistration || (preRegistrationStats[t.id] ?? 0) > 0) && (
+                                {isAdminAuth && (t.preRegistration || (preRegistrationStats[t.id]?.activeCount ?? 0) > 0 || (preRegistrationStats[t.id]?.waitlistedCount ?? 0) > 0) && (
                                   <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between gap-3">
-                                    <span className="text-sm font-black text-emerald-800">預報名 {preRegistrationStats[t.id] ?? 0} / {t.preRegistration?.capacity ?? '未設定'}</span>
+                                    <span className="text-sm font-black text-emerald-800">正取 {preRegistrationStats[t.id]?.activeCount ?? 0} / {t.preRegistration?.capacity ?? '未設定'} · 候補 {preRegistrationStats[t.id]?.waitlistedCount ?? 0}</span>
                                     <button type="button" onClick={() => setAdminRegistrationEvent(t)} className="px-3 py-2 bg-emerald-700 text-white text-sm font-black rounded-lg hover:bg-emerald-800">查看預報名名單</button>
                                   </div>
                                 )}
@@ -1843,7 +1944,7 @@ export default function App() {
                                       prizeImages: Array.isArray(t.prizeImages) ? t.prizeImages : []
                                     }); 
                                   }} className="flex-1 py-2 text-blue-600 bg-blue-50 rounded-xl hover:bg-blue-100 active:scale-95 transition-all shadow-sm font-bold text-sm">編輯</button>
-                                  <button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monster_tournaments', t.id))} className="px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-95 transition-all shadow-sm flex justify-center"><Trash2 className="w-4 h-4"/></button>
+                                  <button type="button" onClick={() => handleDeleteTournament(t.id)} className="px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 active:scale-95 transition-all shadow-sm flex justify-center"><Trash2 className="w-4 h-4"/></button>
                                 </div>
                                 
                                 {/* 後台也同步顯示展開的資訊 */}
@@ -1906,7 +2007,7 @@ export default function App() {
       </main>
 
       {registrationEvent && (
-        <PreRegistrationDialog event={registrationEvent} functions={functions} onClose={() => setRegistrationEvent(null)} />
+        <PreRegistrationDialog event={registrationEvent.event} allowWaitlist={registrationEvent.allowWaitlist} functions={functions} onClose={() => setRegistrationEvent(null)} />
       )}
       {showManagementDialog && (
         <RegistrationManagementDialog functions={functions} onClose={() => setShowManagementDialog(false)} />

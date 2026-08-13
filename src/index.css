@@ -1,3 +1,19 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html:has([data-b4a-mobile-viewport="375x812"]),
+body:has([data-b4a-mobile-viewport="375x812"]) {
+  width: 375px;
+  height: 812px;
+  overflow: hidden;
+}
+
+[data-b4a-mobile-viewport="375x812"] [role="dialog"][aria-modal="true"] {
+  width: 375px;
+  height: 812px;
+  right: auto;
+  bottom: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}

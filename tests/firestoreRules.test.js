@@ -130,6 +130,18 @@ describe('public tournament collections', () => {
     await assertSucceeds(deleteDoc(doc(db, path)));
   });
 
+  test('events with any preregistration aggregate cannot be hard deleted by an administrator', async () => {
+    const eventPath = `${DATA_ROOT}/monster_tournaments/protected-event`;
+    const aggregatePath = `artifacts/${APP_ID}/private/data/tournamentPreRegistrations/protected-event`;
+    await seed(eventPath, { title: 'Protected' });
+    await seed(aggregatePath, { schemaVersion: 2, activeCount: 0, waitlistedCount: 0, nextWaitlistSequence: 2 });
+    await seed(`${aggregatePath}/entries/cancelled-reg`, { status: 'cancelled', waitlistSequence: 1 });
+
+    await assertFails(deleteDoc(doc(adminDb(), eventPath)));
+    await assertSucceeds(getDoc(doc(adminDb(), eventPath)));
+    await assertFails(deleteDoc(doc(adminDb(), aggregatePath)));
+  });
+
   test('anonymous auth cannot become admin even when its UID matches the allowlist', async () => {
     const db = anonymousDb(ADMIN_UID);
     await assertFails(setDoc(
@@ -146,8 +158,8 @@ describe('tournament pre-registration privacy', () => {
   const entriesPath = `artifacts/${APP_ID}/private/data/tournamentPreRegistrations/event-prereg/entries`;
 
   test('public visitors can read event settings and aggregate counts', async () => {
-    await seed(eventPath, { title: 'Open', preRegistration: { schemaVersion: 1, enabled: true, capacity: 8, deadline: null } });
-    await seed(statsPath, { schemaVersion: 1, activeCount: 1 });
+    await seed(eventPath, { title: 'Open', preRegistration: { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 8, deadline: null } });
+    await seed(statsPath, { schemaVersion: 2, activeCount: 1, waitlistedCount: 2 });
     await assertSucceeds(getDoc(doc(unauthenticatedDb(), eventPath)));
     await assertSucceeds(getDoc(doc(unauthenticatedDb(), statsPath)));
   });

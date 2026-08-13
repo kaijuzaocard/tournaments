@@ -1,5 +1,7 @@
-export const PRE_REGISTRATION_SCHEMA_VERSION = 1;
+export const PRE_REGISTRATION_SCHEMA_VERSION = 2;
+export const PRE_REGISTRATION_LEGACY_SCHEMA_VERSION = 1;
 export const PRE_REGISTRATION_MAX_CAPACITY = 256;
+export const WAITLIST_SELF_SERVICE_NOTICE = '本階段不會自動補位，也不會發送通知；請保存管理連結，自行查看最新順位。';
 export const PRE_REGISTRATION_ENTRY_FIELDS = Object.freeze([
   'requestId',
   'calendarEventId',
@@ -8,6 +10,10 @@ export const PRE_REGISTRATION_ENTRY_FIELDS = Object.freeze([
   'deckName',
   'honorId',
 ]);
+
+export function waitlistSelfServiceNoticeForStatus(status) {
+  return status === 'waitlisted' ? WAITLIST_SELF_SERVICE_NOTICE : '';
+}
 
 const hasControlCharacters = (value) => Array.from(value)
   .some((character) => character.codePointAt(0) < 32 || character.codePointAt(0) === 127);
@@ -42,6 +48,7 @@ export function normalizePreRegistrationSettings(value, eventCapacity = 0) {
   return {
     schemaVersion: PRE_REGISTRATION_SCHEMA_VERSION,
     enabled,
+    waitlistEnabled: source.waitlistEnabled === true,
     capacity,
     deadline,
   };
@@ -50,19 +57,39 @@ export function normalizePreRegistrationSettings(value, eventCapacity = 0) {
 export function validatePreRegistrationSettings(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, error: 'INVALID_PRE_REGISTRATION' };
   const keys = Object.keys(value).sort();
-  const expected = ['capacity', 'deadline', 'enabled', 'schemaVersion'];
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+  const hasVersion = Object.prototype.hasOwnProperty.call(value, 'schemaVersion');
+  const isLegacy = !hasVersion || value.schemaVersion === PRE_REGISTRATION_LEGACY_SCHEMA_VERSION;
+  const isCurrent = value.schemaVersion === PRE_REGISTRATION_SCHEMA_VERSION;
+  const allowed = isLegacy
+    ? (hasVersion ? ['capacity', 'deadline', 'enabled', 'schemaVersion'] : ['capacity', 'deadline', 'enabled'])
+    : ['capacity', 'deadline', 'enabled', 'schemaVersion', 'waitlistEnabled'];
+  const required = isCurrent
+    ? ['capacity', 'deadline', 'enabled', 'schemaVersion']
+    : allowed;
+  if ((!isLegacy && !isCurrent)
+    || required.some((key) => !Object.prototype.hasOwnProperty.call(value, key))
+    || keys.some((key) => !allowed.includes(key))) {
     return { ok: false, error: 'INVALID_PRE_REGISTRATION_FIELDS' };
   }
-  if (value.schemaVersion !== PRE_REGISTRATION_SCHEMA_VERSION || typeof value.enabled !== 'boolean') {
+  if (typeof value.enabled !== 'boolean') {
     return { ok: false, error: 'INVALID_PRE_REGISTRATION' };
   }
-  const capacity = asSafeInteger(value.capacity, { min: 1, max: PRE_REGISTRATION_MAX_CAPACITY });
+  const capacity = typeof value.capacity === 'number'
+    ? asSafeInteger(value.capacity, { min: 1, max: PRE_REGISTRATION_MAX_CAPACITY })
+    : null;
   if (!capacity) return { ok: false, error: 'INVALID_PRE_REGISTRATION_CAPACITY' };
-  if (value.deadline !== null && toMillis(value.deadline) === null) {
+  if (value.deadline !== null && typeof value.deadline?.toMillis !== 'function') {
     return { ok: false, error: 'INVALID_PRE_REGISTRATION_DEADLINE' };
   }
-  return { ok: true, value: { ...value, capacity } };
+  return {
+    ok: true,
+    value: {
+      ...value,
+      schemaVersion: isLegacy ? PRE_REGISTRATION_LEGACY_SCHEMA_VERSION : PRE_REGISTRATION_SCHEMA_VERSION,
+      capacity,
+      waitlistEnabled: !isLegacy && value.waitlistEnabled === true,
+    },
+  };
 }
 
 export function parseTaipeiDateTimeLocal(value) {
@@ -110,20 +137,33 @@ export function eventStartMillis(event) {
   return Number.isNaN(millis) ? null : millis;
 }
 
-export function classifyPreRegistrationAvailability(event, activeCount = 0, now = Date.now()) {
+export function normalizePreRegistrationStats(value) {
+  if (typeof value === 'number') {
+    return { activeCount: asSafeInteger(value, { min: 0 }) ?? 0, waitlistedCount: 0 };
+  }
+  return {
+    activeCount: asSafeInteger(value?.activeCount, { min: 0 }) ?? 0,
+    waitlistedCount: asSafeInteger(value?.waitlistedCount, { min: 0 }) ?? 0,
+  };
+}
+
+export function classifyPreRegistrationAvailability(event, stats = 0, now = Date.now()) {
   const fieldPresent = Object.prototype.hasOwnProperty.call(event ?? {}, 'preRegistration');
-  if (!fieldPresent) return { status: 'not_open', activeCount: 0, capacity: 0 };
+  const counts = normalizePreRegistrationStats(stats);
+  if (!fieldPresent) return { status: 'not_open', ...counts, capacity: 0 };
   const validation = validatePreRegistrationSettings(event.preRegistration);
-  if (!validation.ok) return { status: 'malformed', error: validation.error, activeCount: 0, capacity: 0 };
+  if (!validation.ok) return { status: 'malformed', error: validation.error, ...counts, capacity: 0 };
   const settings = validation.value;
-  const count = asSafeInteger(activeCount, { min: 0 }) ?? 0;
   const start = eventStartMillis(event);
-  if (start !== null && start <= now) return { status: 'ended', activeCount: count, capacity: settings.capacity, settings };
-  if (!settings.enabled) return { status: 'closed', activeCount: count, capacity: settings.capacity, settings };
+  const summary = { ...counts, capacity: settings.capacity, settings };
+  if (start !== null && start <= now) return { status: 'ended', ...summary };
+  if (!settings.enabled) return { status: 'closed', ...summary };
   const deadline = toMillis(settings.deadline);
-  if (deadline !== null && deadline <= now) return { status: 'deadline', activeCount: count, capacity: settings.capacity, settings };
-  if (count >= settings.capacity) return { status: 'full', activeCount: count, capacity: settings.capacity, settings };
-  return { status: 'open', activeCount: count, capacity: settings.capacity, settings };
+  if (deadline !== null && deadline <= now) return { status: 'deadline', ...summary };
+  if (counts.activeCount >= settings.capacity) {
+    return { status: settings.waitlistEnabled ? 'waitlist' : 'full', ...summary };
+  }
+  return { status: 'open', ...summary };
 }
 
 export function normalizeCustomerFields(value) {
@@ -158,14 +198,48 @@ export function buildManagementUrl({ origin, calendarEventId, registrationId, ma
   return url.toString();
 }
 
+export function extractCallableErrorDetails(error) {
+  const details = error?.details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+  if (details.code !== 'PRE_REGISTRATION_FULL') return null;
+  return {
+    code: 'PRE_REGISTRATION_FULL',
+    waitlistAvailable: details.waitlistAvailable === true,
+  };
+}
+
+export function extractCallableErrorCode(error) {
+  const details = extractCallableErrorDetails(error);
+  if (details) return details.code;
+  for (const candidate of [error?.message, error?.code]) {
+    if (typeof candidate !== 'string') continue;
+    const match = candidate.match(/([A-Z][A-Z0-9_]{2,80})$/);
+    if (match) return match[1];
+  }
+  return 'UNKNOWN_ERROR';
+}
+
 export function removePreRegistrationSecrets(entry) {
+  const status = ['active', 'waitlisted', 'cancelled'].includes(entry?.status) ? entry.status : 'invalid';
   return {
     registrationId: String(entry?.registrationId || ''),
     playerName: String(entry?.playerName || ''),
     officialId: String(entry?.officialId || ''),
     deckName: String(entry?.deckName || ''),
     honorId: String(entry?.honorId || ''),
-    status: entry?.status === 'cancelled' ? 'cancelled' : 'active',
+    status,
+    waitlistSequence: Number.isSafeInteger(entry?.waitlistSequence) && entry.waitlistSequence > 0
+      ? entry.waitlistSequence
+      : null,
+    waitlistRank: Number.isSafeInteger(entry?.waitlistRank) && entry.waitlistRank > 0
+      ? entry.waitlistRank
+      : null,
+    waitlistRankState: entry?.status === 'waitlisted'
+      && entry?.waitlistRankState === 'available'
+      && Number.isSafeInteger(entry?.waitlistRank)
+      && entry.waitlistRank > 0
+      ? 'available'
+      : entry?.status === 'waitlisted' ? 'unavailable' : 'not_applicable',
     createdAt: entry?.createdAt ?? null,
     updatedAt: entry?.updatedAt ?? null,
     cancelledAt: entry?.cancelledAt ?? null,
@@ -178,4 +252,31 @@ export function removePreRegistrationSecrets(entry) {
     canUpdate: entry?.canUpdate === true,
     canCancel: entry?.canCancel === true,
   };
+}
+
+export function deriveWaitlistRanks(entries) {
+  const waitlisted = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry?.status === 'waitlisted');
+  const sequences = new Set();
+  for (const entry of waitlisted) {
+    if (!Number.isSafeInteger(entry.waitlistSequence)
+      || entry.waitlistSequence < 1
+      || sequences.has(entry.waitlistSequence)) return {};
+    sequences.add(entry.waitlistSequence);
+  }
+  waitlisted.sort((left, right) => left.waitlistSequence - right.waitlistSequence
+    || String(left.registrationId).localeCompare(String(right.registrationId)));
+  return Object.fromEntries(waitlisted.map((entry, index) => [entry.registrationId, index + 1]));
+}
+
+export function registrationStatusLabel(status, waitlistRank = null, waitlistRankState = 'available') {
+  if (status === 'active') return '正取';
+  if (status === 'waitlisted') {
+    if (waitlistRankState === 'unavailable') return '候補 · 順位暫時無法計算';
+    return Number.isSafeInteger(waitlistRank) && waitlistRank > 0
+      ? `候補 · 目前候補第 ${waitlistRank} 位`
+      : '候補';
+  }
+  if (status === 'cancelled') return '已取消';
+  return '資料異常';
 }

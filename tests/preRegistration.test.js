@@ -4,13 +4,24 @@ import assert from 'node:assert/strict';
 import {
   buildManagementUrl,
   classifyPreRegistrationAvailability,
+  deriveWaitlistRanks,
+  extractCallableErrorCode,
+  extractCallableErrorDetails,
   formatTaipeiDateTimeLocal,
   normalizeCustomerFields,
   normalizePreRegistrationSettings,
+  normalizePreRegistrationStats,
   parseTaipeiDateTimeLocal,
   preparePreRegistrationForWrite,
+  registrationStatusLabel,
+  removePreRegistrationSecrets,
+  validatePreRegistrationSettings,
+  PRE_REGISTRATION_ENTRY_FIELDS,
+  WAITLIST_SELF_SERVICE_NOTICE,
+  waitlistSelfServiceNoticeForStatus,
 } from '../src/utils/preRegistration.js';
 import { captureManagementRoute } from '../src/utils/managementTokenBootstrap.js';
+import { validateManagePayload, validateSubmitPayload } from '../functions/src/contracts.js';
 
 const futureEvent = (preRegistration) => ({
   id: 'event-1',
@@ -26,8 +37,9 @@ test('old events without preRegistration remain closed and render no public acti
 
 test('valid settings normalize and cap capacity at a positive safe integer', () => {
   assert.deepEqual(normalizePreRegistrationSettings({ enabled: true, capacity: 8, deadline: null }), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     enabled: true,
+    waitlistEnabled: false,
     capacity: 8,
     deadline: null,
   });
@@ -41,12 +53,88 @@ test('Taipei deadline input round trips independently from browser timezone', ()
 });
 
 test('public availability distinguishes open, deadline, full, closed, and ended', () => {
-  const settings = { schemaVersion: 1, enabled: true, capacity: 2, deadline: new Date('2030-08-01T18:00:00+08:00') };
+  const settings = {
+    schemaVersion: 1,
+    enabled: true,
+    capacity: 2,
+    deadline: { toMillis: () => Date.parse('2030-08-01T18:00:00+08:00') },
+  };
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 1, Date.parse('2030-01-01')).status, 'open');
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 2, Date.parse('2030-01-01')).status, 'full');
   assert.equal(classifyPreRegistrationAvailability(futureEvent(settings), 0, Date.parse('2030-08-01T18:30:00+08:00')).status, 'deadline');
   assert.equal(classifyPreRegistrationAvailability(futureEvent({ ...settings, enabled: false }), 0, Date.parse('2030-01-01')).status, 'closed');
   assert.equal(classifyPreRegistrationAvailability(futureEvent({ ...settings, deadline: null }), 0, Date.parse('2030-08-01T19:01:00+08:00')).status, 'ended');
+});
+
+test('legacy v1 events default waitlist off while v2 requires explicit opt-in', () => {
+  const legacy = { schemaVersion: 1, enabled: true, capacity: 1, deadline: null };
+  const enabled = { schemaVersion: 2, enabled: true, waitlistEnabled: true, capacity: 1, deadline: null };
+  assert.equal(classifyPreRegistrationAvailability(futureEvent(legacy), { activeCount: 1 }, 0).status, 'full');
+  assert.deepEqual(
+    classifyPreRegistrationAvailability(futureEvent(enabled), { activeCount: 1, waitlistedCount: 2 }, 0),
+    {
+      status: 'waitlist',
+      activeCount: 1,
+      waitlistedCount: 2,
+      capacity: 1,
+      settings: enabled,
+    },
+  );
+  assert.deepEqual(normalizePreRegistrationStats({ activeCount: 0, waitlistedCount: 0 }), { activeCount: 0, waitlistedCount: 0 });
+});
+
+test('frontend settings reader accepts missing-version legacy and safely disables invalid v2 waitlist flags', () => {
+  const legacy = validatePreRegistrationSettings({ enabled: true, capacity: 8, deadline: null });
+  assert.equal(legacy.ok, true);
+  assert.equal(legacy.value.schemaVersion, 1);
+  assert.equal(legacy.value.waitlistEnabled, false);
+  for (const waitlistEnabled of [undefined, null, false, 'true', 1, {}, []]) {
+    const config = { schemaVersion: 2, enabled: true, capacity: 8, deadline: null };
+    if (waitlistEnabled !== undefined) config.waitlistEnabled = waitlistEnabled;
+    const result = validatePreRegistrationSettings(config);
+    assert.equal(result.ok, true);
+    assert.equal(result.value.waitlistEnabled, false);
+  }
+  assert.equal(validatePreRegistrationSettings({ enabled: true, capacity: 8, deadline: null, extra: true }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 3, enabled: true, capacity: 8, deadline: null }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 2, enabled: true, capacity: 0, deadline: null }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 2, enabled: true, capacity: '8', deadline: null }).ok, false);
+  assert.equal(validatePreRegistrationSettings({ schemaVersion: 2, enabled: true, capacity: 8, deadline: {} }).ok, false);
+});
+
+test('callable error helpers allowlist structured full details without stringifying objects', () => {
+  const safe = { details: { code: 'PRE_REGISTRATION_FULL', waitlistAvailable: true } };
+  assert.equal(extractCallableErrorCode(safe), 'PRE_REGISTRATION_FULL');
+  assert.deepEqual(extractCallableErrorDetails(safe), {
+    code: 'PRE_REGISTRATION_FULL', waitlistAvailable: true,
+  });
+  assert.equal(extractCallableErrorDetails({ details: { code: 'INTERNAL_ERROR', secret: 'no' } }), null);
+  assert.equal(extractCallableErrorCode({ details: { arbitrary: true }, message: { unsafe: true } }), 'UNKNOWN_ERROR');
+  assert.equal(extractCallableErrorCode({ message: 'PRE_REGISTRATION_FULL' }), 'PRE_REGISTRATION_FULL');
+});
+
+test('management and admin presentation preserve all statuses and derive rank without mutation', () => {
+  const entries = [
+    removePreRegistrationSecrets({ registrationId: 'later', status: 'waitlisted', waitlistSequence: 9 }),
+    removePreRegistrationSecrets({ registrationId: 'active', status: 'active' }),
+    removePreRegistrationSecrets({ registrationId: 'cancelled', status: 'cancelled', waitlistSequence: 2 }),
+    removePreRegistrationSecrets({ registrationId: 'first', status: 'waitlisted', waitlistSequence: 4 }),
+  ];
+  assert.deepEqual(deriveWaitlistRanks(entries), { first: 1, later: 2 });
+  assert.equal(registrationStatusLabel('active'), '正取');
+  assert.equal(registrationStatusLabel('waitlisted', 2), '候補 · 目前候補第 2 位');
+  assert.equal(registrationStatusLabel('cancelled'), '已取消');
+  assert.equal(entries[0].waitlistSequence, 9);
+  assert.deepEqual(deriveWaitlistRanks([
+    ...entries,
+    removePreRegistrationSecrets({ registrationId: 'broken', status: 'waitlisted', waitlistSequence: null }),
+  ]), {});
+  assert.deepEqual(deriveWaitlistRanks([
+    removePreRegistrationSecrets({ registrationId: 'duplicate-a', status: 'waitlisted', waitlistSequence: 1 }),
+    removePreRegistrationSecrets({ registrationId: 'duplicate-b', status: 'waitlisted', waitlistSequence: 1 }),
+  ]), {});
+  assert.equal(registrationStatusLabel('waitlisted', null, 'unavailable'), '候補 · 順位暫時無法計算');
+  assert.equal(removePreRegistrationSecrets({ status: 'active' }).waitlistRankState, 'not_applicable');
 });
 
 test('customer fields trim values and reject control characters or oversized input', () => {
@@ -84,6 +172,7 @@ test('management tokens are never written to browser storage', () => {
     fs.readFileSync(new URL('../src/components/PreRegistrationDialog.jsx', import.meta.url), 'utf8'),
   ].join('\n');
   assert.doesNotMatch(sources, /localStorage|sessionStorage/);
+  assert.match(sources, /consumeGeneratedManagementUrl\(\(url\) => window\.location\.assign\(url\)\)/);
 });
 
 test('customer pre-registration code uses callables and never directly writes or lists private entries', () => {
@@ -91,12 +180,58 @@ test('customer pre-registration code uses callables and never directly writes or
   const customerSection = component.slice(0, component.indexOf('export function PreRegistrationAdminDialog'));
   assert.match(customerSection, /httpsCallable/);
   assert.doesNotMatch(customerSection, /\baddDoc\b|\bgetDocs\b|\bsetDoc\b|\bupdateDoc\b|\bdeleteDoc\b/);
+  assert.match(customerSection, /同意改加入候補/);
+  assert.match(customerSection, /if \(consent\) payload\.allowWaitlist = true/);
+  assert.doesNotMatch(customerSection, /allowWaitlist:\s*false/);
+});
+
+test('canonical preregistration entry contract preserves exactly four customer fields and no note', () => {
+  assert.deepEqual(PRE_REGISTRATION_ENTRY_FIELDS.slice(2), ['playerName', 'officialId', 'deckName', 'honorId']);
+  assert.equal(PRE_REGISTRATION_ENTRY_FIELDS.includes('note'), false);
+});
+
+test('submit and update exact-key contracts reject a note field', () => {
+  const customer = { playerName: 'Player', officialId: 'Official', deckName: 'Deck', honorId: 'Honor' };
+  assert.throws(() => validateSubmitPayload({ requestId: 'request-1', calendarEventId: 'event-1', ...customer, note: 'extra' }), /UNKNOWN_OR_MISSING_FIELDS/);
+  assert.throws(() => validateManagePayload({ action: 'update', calendarEventId: 'event-1', registrationId: 'registration-1', managementToken: 'a'.repeat(43), ...customer, note: 'extra' }), /UNKNOWN_OR_MISSING_FIELDS/);
+});
+
+test('single waitlist copy authority states no auto-promotion and no notification', () => {
+  assert.match(WAITLIST_SELF_SERVICE_NOTICE, /不會自動補位/);
+  assert.match(WAITLIST_SELF_SERVICE_NOTICE, /不會發送通知/);
+  assert.match(WAITLIST_SELF_SERVICE_NOTICE, /保存管理連結/);
+});
+
+test('active success has no waitlist notice while waitlisted success does', () => {
+  assert.equal(waitlistSelfServiceNoticeForStatus('active'), '');
+  assert.equal(waitlistSelfServiceNoticeForStatus('waitlisted'), WAITLIST_SELF_SERVICE_NOTICE);
+});
+
+test('waitlist copy adds no notification operation', () => {
+  const sources = [
+    fs.readFileSync(new URL('../src/utils/preRegistration.js', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../src/components/PreRegistrationDialog.jsx', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../functions/src/service.js', import.meta.url), 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(sources, /sendWaitlistNotification|sendWaitlistEmail|notifyWaitlist|autoPromote/);
 });
 
 test('admin entry listener is scoped to the open authorized modal and returns cleanup', () => {
   const component = fs.readFileSync(new URL('../src/components/PreRegistrationDialog.jsx', import.meta.url), 'utf8');
   assert.match(component, /if \(!open \|\| !isAdmin \|\| !event\?\.id\) return undefined/);
   assert.match(component, /return unsubscribe/);
+  assert.match(component, /option value="waitlisted">候補/);
+  assert.match(component, /順位資料異常/);
+  assert.doesNotMatch(component, /promote|reorder|通知候補/iu);
+});
+
+test('Calendar preregistration introduces no check-in or handed-off boolean', () => {
+  const sources = [
+    fs.readFileSync(new URL('../src/utils/preRegistration.js', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../functions/src/contracts.js', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../functions/src/service.js', import.meta.url), 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(sources, /checkedIn|handedOff/);
 });
 
 test('B1 Swiss handoff remains present and pre-registration is not added to its payload contract', () => {

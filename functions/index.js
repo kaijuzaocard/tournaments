@@ -3,6 +3,7 @@ import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
 import { defineSecret, defineString } from 'firebase-functions/params';
 import { createPreRegistrationService, ServiceError } from './src/service.js';
+import { SCHEMA_VERSION } from './src/contracts.js';
 import {
   HandoffServiceError,
   createTournamentPreRegistrationHandoffService,
@@ -142,6 +143,8 @@ function callableError(error) {
     'PRE_REGISTRATION_CONFIG_INVALID',
     'PRE_REGISTRATION_DEADLINE_PASSED',
     'PRE_REGISTRATION_FULL',
+    'OFFICIAL_ID_CONFLICT',
+    'HONOR_ID_CONFLICT',
     'POSSIBLE_DUPLICATE_REGISTRATION',
     'REQUEST_ID_PAYLOAD_MISMATCH',
     'REGISTRATION_NOT_FOUND',
@@ -166,16 +169,22 @@ function callableError(error) {
     const diagnosticCode = safeCode || safeMessage || error?.name || 'UnknownError';
     console.error('Calendar pre-registration callable failed', { code, diagnosticCode });
   }
-  return new HttpsError(status, publicCode);
+  const details = error instanceof ServiceError && publicCode === error.code
+    ? error.publicDetails
+    : undefined;
+  return new HttpsError(status, publicCode, details);
 }
 
 export const submitTournamentPreRegistration = onCall(callableOptions, async (request) => {
   try {
     const result = await functionService().submit(request.data, callableClientIp(request));
     return {
-      schemaVersion: 1,
+      schemaVersion: SCHEMA_VERSION,
       registrationId: result.registrationId,
       managementToken: result.managementToken,
+      status: result.status,
+      waitlistRank: result.waitlistRank,
+      waitlistRankState: result.waitlistRankState,
       replayed: result.replayed,
     };
   } catch (error) {
@@ -187,6 +196,16 @@ export const manageTournamentPreRegistration = onCall(callableOptions, async (re
   try {
     return await functionService().manage(request.data, callableClientIp(request));
   } catch (error) {
+    throw callableError(error);
+  }
+});
+
+export const adminManageTournamentPreRegistration = onCall(callableOptions, async (request) => {
+  try {
+    requireCalendarAdmin(request);
+    return await functionService().adminManage(request.data);
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
     throw callableError(error);
   }
 });

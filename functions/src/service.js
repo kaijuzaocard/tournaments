@@ -4,11 +4,15 @@ import {
   CANCELLED_STATUS,
   ContractError,
   SCHEMA_VERSION,
+  WAITLISTED_STATUS,
   classifyPreRegistrationConfig,
   classifyRegistrationManagementPolicy,
   eventStartMillis,
+  isLiveRegistrationStatus,
   normalizeIdentity,
+  normalizeIdentities,
   publicRegistration,
+  validateAdminManagePayload,
   validateManagePayload,
   validateSubmitPayload,
 } from './contracts.js';
@@ -22,10 +26,16 @@ import {
 } from './security.js';
 
 export class ServiceError extends Error {
-  constructor(code, message = code) {
-    super(message);
+  constructor(code, publicDetails = null) {
+    super(code);
     this.name = 'ServiceError';
     this.code = code;
+    this.publicDetails = code === 'PRE_REGISTRATION_FULL'
+      ? Object.freeze({
+        code: 'PRE_REGISTRATION_FULL',
+        waitlistAvailable: publicDetails?.waitlistAvailable === true,
+      })
+      : undefined;
   }
 }
 
@@ -46,6 +56,40 @@ function assertEventAcceptsRegistration(event, nowMillis) {
   return config;
 }
 
+function unavailableWaitlistRank(reason) {
+  console.warn('Calendar waitlist rank unavailable', {
+    code: 'WAITLIST_RANK_UNAVAILABLE',
+    reason,
+  });
+  return { state: 'unavailable', rank: null };
+}
+
+function waitlistRank(snapshot, registrationId, ownSequence) {
+  if (!Number.isSafeInteger(ownSequence) || ownSequence < 1) {
+    return unavailableWaitlistRank('OWN_SEQUENCE_INVALID');
+  }
+  const sequences = new Set();
+  let ownMatches = 0;
+  for (const document of snapshot.docs) {
+    const entry = document.data();
+    const sequence = entry.waitlistSequence;
+    if (!Number.isSafeInteger(sequence) || sequence < 1) {
+      return unavailableWaitlistRank('LIVE_SEQUENCE_INVALID');
+    }
+    if (sequences.has(sequence)) return unavailableWaitlistRank('DUPLICATE_LIVE_SEQUENCE');
+    sequences.add(sequence);
+    if ((entry.registrationId || document.id) === registrationId) {
+      ownMatches += 1;
+      if (sequence !== ownSequence) return unavailableWaitlistRank('OWN_SEQUENCE_MISMATCH');
+    }
+  }
+  if (ownMatches !== 1 || !sequences.has(ownSequence)) {
+    return unavailableWaitlistRank('OWN_ENTRY_NOT_PROVEN');
+  }
+  const ordered = [...sequences].sort((left, right) => left - right);
+  return { state: 'available', rank: ordered.indexOf(ownSequence) + 1 };
+}
+
 export function createPreRegistrationService({ db, FieldValue, Timestamp, secret, now = () => Date.now() }) {
   const root = (...parts) => db.doc(['artifacts', APP_ID, ...parts].join('/'));
   const eventRef = (eventId) => root('public', 'data', 'monster_tournaments', eventId);
@@ -55,6 +99,124 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
   const identityRef = (eventId, identityHash) => registrationRef(eventId).collection('identities').doc(identityHash);
   const statsRef = (eventId) => root('public', 'data', 'tournamentPreRegistrationStats', eventId);
   const rateLimitRef = (id) => root('private', 'data', 'tournamentPreRegistrationRateLimits', id);
+
+  const entriesWithStatus = (eventId, status) => registrationRef(eventId)
+    .collection('entries')
+    .where('status', '==', status);
+  const liveEntries = (eventId) => registrationRef(eventId)
+    .collection('entries')
+    .where('status', 'in', [ACTIVE_STATUS, WAITLISTED_STATUS]);
+
+  const hashesForIdentities = (eventId, identities) => identities
+    .map((identity) => hmac(secret, 'identity', `${eventId}:${identity}`));
+  const identityHashesForFields = (eventId, fields) => hashesForIdentities(
+    eventId,
+    normalizeIdentities(fields),
+  );
+  const identityHashesForEntry = (eventId, entry) => [...new Set([
+    ...(Array.isArray(entry.identityHashes)
+      ? entry.identityHashes.filter((value) => typeof value === 'string' && value)
+      : []),
+    ...(typeof entry.identityHash === 'string' && entry.identityHash ? [entry.identityHash] : []),
+    ...identityHashesForFields(eventId, entry),
+  ])];
+
+  const sameIdentityHashes = (left, right) => left.length === right.length
+    && left.every((value) => right.includes(value));
+
+  async function checkLegacyIdentityConflicts({
+    transaction,
+    eventId,
+    registrationId,
+    requestedIdentities,
+    aggregate,
+    conflictCodeForIdentity = () => 'POSSIBLE_DUPLICATE_REGISTRATION',
+  }) {
+    if (aggregate === null || aggregate?.identityAuthorityVersion === 2) return true;
+    const snapshot = await transaction.get(liveEntries(eventId));
+    const requested = new Set(requestedIdentities);
+    let allLiveEntriesUseMultiIdentityLocks = true;
+    for (const document of snapshot.docs) {
+      const entry = document.data();
+      const entryRegistrationId = entry.registrationId || document.id;
+      const entryIdentities = normalizeIdentities(entry);
+      const expectedHashes = hashesForIdentities(eventId, entryIdentities);
+      const storedHashes = Array.isArray(entry.identityHashes)
+        ? [...new Set(entry.identityHashes.filter((value) => typeof value === 'string' && value))]
+        : null;
+      if (!storedHashes || !sameIdentityHashes(storedHashes, expectedHashes)) {
+        allLiveEntriesUseMultiIdentityLocks = false;
+      }
+      const conflictingIdentity = entryIdentities.find((identity) => requested.has(identity));
+      if (entryRegistrationId !== registrationId && conflictingIdentity) {
+        throw new ServiceError(conflictCodeForIdentity(conflictingIdentity));
+      }
+    }
+    return allLiveEntriesUseMultiIdentityLocks;
+  }
+
+  async function readIdentityLocks(transaction, eventId, hashes) {
+    const locks = new Map();
+    for (const hash of hashes) {
+      const reference = identityRef(eventId, hash);
+      locks.set(hash, { reference, snapshot: await transaction.get(reference) });
+    }
+    return locks;
+  }
+
+  function readLiveCounts(aggregate) {
+    const aggregateFields = ['activeCount', 'waitlistedCount', 'nextWaitlistSequence'];
+    const hasCompleteAggregate = aggregateFields.every((field) => Object.hasOwn(aggregate ?? {}, field));
+    if (hasCompleteAggregate) {
+      if (!Number.isSafeInteger(aggregate.activeCount) || aggregate.activeCount < 0
+        || !Number.isSafeInteger(aggregate.waitlistedCount) || aggregate.waitlistedCount < 0
+        || !Number.isSafeInteger(aggregate.nextWaitlistSequence) || aggregate.nextWaitlistSequence < 1) {
+        throw new ServiceError('WAITLIST_STATE_INVALID');
+      }
+      return {
+        activeCount: aggregate.activeCount,
+        waitlistedCount: aggregate.waitlistedCount,
+        nextWaitlistSequence: aggregate.nextWaitlistSequence,
+      };
+    }
+
+    // B2A has always written the private aggregate in the same transaction as
+    // every entry. A missing document therefore means a new event, while a v1
+    // aggregate can only contain active entries. Trusting that server-owned
+    // invariant avoids collection-query retries during the first concurrent
+    // submissions and keeps v1 reads compatible.
+    if (aggregate !== null
+      && (!Number.isSafeInteger(aggregate.activeCount) || aggregate.activeCount < 0)) {
+      throw new ServiceError('WAITLIST_STATE_INVALID');
+    }
+    return {
+      activeCount: aggregate?.activeCount ?? 0,
+      waitlistedCount: 0,
+      nextWaitlistSequence: 1,
+    };
+  }
+
+  function writeCounts(transaction, eventId, aggregate, timestamp, { identityAuthorityReady = false } = {}) {
+    const counts = {
+      schemaVersion: SCHEMA_VERSION,
+      activeCount: aggregate.activeCount,
+      waitlistedCount: aggregate.waitlistedCount,
+      updatedAt: timestamp,
+    };
+    const privateCounts = {
+      ...counts,
+      nextWaitlistSequence: aggregate.nextWaitlistSequence,
+    };
+    if (identityAuthorityReady) privateCounts.identityAuthorityVersion = 2;
+    transaction.set(registrationRef(eventId), privateCounts, { merge: true });
+    transaction.set(statsRef(eventId), counts);
+  }
+
+  async function currentWaitlistRank(eventId, registrationId, sequence) {
+    if (sequence === null) return { state: 'not_applicable', rank: null };
+    const snapshot = await entriesWithStatus(eventId, WAITLISTED_STATUS).get();
+    return waitlistRank(snapshot, registrationId, sequence);
+  }
 
   async function consumeRateLimit({ scope, subject, limit, windowMs }) {
     const current = now();
@@ -83,13 +245,29 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
     const operation = snapshot.data();
     if (operation.fingerprint !== fingerprint) throw new ServiceError('REQUEST_ID_PAYLOAD_MISMATCH');
     const credentials = deterministicCredentials(secret, payload.requestId, fingerprint);
-    return { ...credentials, replayed: true };
+    const status = operation.status === WAITLISTED_STATUS ? WAITLISTED_STATUS : ACTIVE_STATUS;
+    const sequence = status === WAITLISTED_STATUS ? operation.waitlistSequence : null;
+    const rankResult = await currentWaitlistRank(
+      payload.calendarEventId,
+      operation.registrationId || credentials.registrationId,
+      sequence,
+    );
+    return {
+      ...credentials,
+      status,
+      waitlistRank: rankResult.rank,
+      waitlistRankState: rankResult.state,
+      replayed: true,
+    };
   }
 
   async function submit(rawPayload, rawIp) {
     try {
       const payload = validateSubmitPayload(rawPayload);
-      const canonical = stableJson(payload);
+      const fingerprintPayload = payload.allowWaitlist
+        ? payload
+        : Object.fromEntries(Object.entries(payload).filter(([field]) => field !== 'allowWaitlist'));
+      const canonical = stableJson(fingerprintPayload);
       const fingerprint = hmac(secret, 'payload-fingerprint', canonical);
       const operationId = hmac(secret, 'operation-id', payload.requestId);
       const replay = await findReplay(payload, operationId, fingerprint);
@@ -97,8 +275,10 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
 
       const ip = normalizeTrustedIp(rawIp);
       await consumeRateLimit({ scope: 'submit_ip', subject: ip, limit: 8, windowMs: 10 * 60 * 1000 });
+      const identities = normalizeIdentities(payload);
+      const identityHashes = hashesForIdentities(payload.calendarEventId, identities);
       const identity = normalizeIdentity(payload);
-      const identityHash = identity ? hmac(secret, 'identity', `${payload.calendarEventId}:${identity}`) : null;
+      const identityHash = identityHashes[0] ?? null;
       if (identityHash) {
         await consumeRateLimit({
           scope: 'submit_identity',
@@ -109,29 +289,51 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
       }
 
       const credentials = deterministicCredentials(secret, payload.requestId, fingerprint);
-      const created = await db.runTransaction(async (transaction) => {
+      const outcome = await db.runTransaction(async (transaction) => {
         const eventSnapshot = await transaction.get(eventRef(payload.calendarEventId));
         if (!eventSnapshot.exists) throw new ServiceError('EVENT_NOT_FOUND');
         const config = assertEventAcceptsRegistration(eventSnapshot.data(), now());
         const operationReference = operationRef(payload.calendarEventId, operationId);
         const operationSnapshot = await transaction.get(operationReference);
         if (operationSnapshot.exists) {
-          if (operationSnapshot.data().fingerprint !== fingerprint) throw new ServiceError('REQUEST_ID_PAYLOAD_MISMATCH');
-          return false;
+          const operation = operationSnapshot.data();
+          if (operation.fingerprint !== fingerprint) throw new ServiceError('REQUEST_ID_PAYLOAD_MISMATCH');
+          const status = operation.status === WAITLISTED_STATUS ? WAITLISTED_STATUS : ACTIVE_STATUS;
+          return {
+            created: false,
+            status,
+            waitlistSequence: status === WAITLISTED_STATUS ? operation.waitlistSequence : null,
+          };
         }
 
         const aggregateReference = registrationRef(payload.calendarEventId);
-        await transaction.get(aggregateReference);
-        const entriesQuery = aggregateReference.collection('entries').where('status', '==', ACTIVE_STATUS);
-        const activeSnapshot = await transaction.get(entriesQuery);
-        const activeCount = activeSnapshot.size;
-        if (activeCount >= config.capacity) throw new ServiceError('PRE_REGISTRATION_FULL');
+        const aggregateSnapshot = await transaction.get(aggregateReference);
+        const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
+        const counts = readLiveCounts(aggregate);
+        let status = ACTIVE_STATUS;
+        let sequence = null;
+        if (counts.activeCount >= config.capacity) {
+          if (!config.waitlistEnabled || !payload.allowWaitlist) {
+            throw new ServiceError('PRE_REGISTRATION_FULL', {
+              waitlistAvailable: config.waitlistEnabled === true,
+            });
+          }
+          status = WAITLISTED_STATUS;
+          sequence = counts.nextWaitlistSequence;
+        }
 
-        let duplicateReference = null;
-        if (identityHash) {
-          duplicateReference = identityRef(payload.calendarEventId, identityHash);
-          const duplicateSnapshot = await transaction.get(duplicateReference);
-          if (duplicateSnapshot.exists && duplicateSnapshot.data().status === ACTIVE_STATUS) {
+        const identityAuthorityReady = await checkLegacyIdentityConflicts({
+          transaction,
+          eventId: payload.calendarEventId,
+          registrationId: credentials.registrationId,
+          requestedIdentities: identities,
+          aggregate,
+        });
+        const identityLocks = await readIdentityLocks(transaction, payload.calendarEventId, identityHashes);
+        for (const { snapshot } of identityLocks.values()) {
+          if (snapshot.exists
+            && snapshot.data().registrationId !== credentials.registrationId
+            && isLiveRegistrationStatus(snapshot.data().status)) {
             throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
           }
         }
@@ -145,41 +347,52 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
           officialId: payload.officialId,
           deckName: payload.deckName,
           honorId: payload.honorId,
-          status: ACTIVE_STATUS,
+          status,
           tokenHash: hashManagementToken(secret, credentials.managementToken),
           identityHash,
+          identityHashes,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
+        if (sequence !== null) entry.waitlistSequence = sequence;
         transaction.create(entryRef(payload.calendarEventId, credentials.registrationId), entry);
-        transaction.create(operationReference, {
+        const operation = {
           schemaVersion: SCHEMA_VERSION,
           fingerprint,
           registrationId: credentials.registrationId,
+          status,
           createdAt: timestamp,
-        });
-        if (duplicateReference) {
-          transaction.set(duplicateReference, {
+        };
+        if (sequence !== null) operation.waitlistSequence = sequence;
+        transaction.create(operationReference, operation);
+        for (const { reference } of identityLocks.values()) {
+          transaction.set(reference, {
             schemaVersion: SCHEMA_VERSION,
             registrationId: credentials.registrationId,
-            status: ACTIVE_STATUS,
+            status,
             updatedAt: timestamp,
           });
         }
-        transaction.set(aggregateReference, {
-          schemaVersion: SCHEMA_VERSION,
-          activeCount: activeCount + 1,
-          updatedAt: timestamp,
-        }, { merge: true });
-        transaction.set(statsRef(payload.calendarEventId), {
-          schemaVersion: SCHEMA_VERSION,
-          activeCount: activeCount + 1,
-          updatedAt: timestamp,
-        });
-        return true;
+        writeCounts(transaction, payload.calendarEventId, {
+          activeCount: counts.activeCount + (status === ACTIVE_STATUS ? 1 : 0),
+          waitlistedCount: counts.waitlistedCount + (status === WAITLISTED_STATUS ? 1 : 0),
+          nextWaitlistSequence: sequence === null ? counts.nextWaitlistSequence : sequence + 1,
+        }, timestamp, { identityAuthorityReady });
+        return { created: true, status, waitlistSequence: sequence };
       });
 
-      return { ...credentials, replayed: !created };
+      const rankResult = await currentWaitlistRank(
+        payload.calendarEventId,
+        credentials.registrationId,
+        outcome.waitlistSequence,
+      );
+      return {
+        ...credentials,
+        status: outcome.status,
+        waitlistRank: rankResult.rank,
+        waitlistRankState: rankResult.state,
+        replayed: !outcome.created,
+      };
     } catch (error) {
       throw asServiceError(error);
     }
@@ -198,66 +411,160 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
     return { reference, entry, policy };
   }
 
+  async function getAdminEntryAndEvent(transaction, payload) {
+    const reference = entryRef(payload.calendarEventId, payload.registrationId);
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists) throw new ServiceError('REGISTRATION_NOT_FOUND');
+    const entry = snapshot.data();
+    if (entry.calendarEventId !== payload.calendarEventId) {
+      throw new ServiceError('REGISTRATION_NOT_FOUND');
+    }
+    const eventSnapshot = await transaction.get(eventRef(payload.calendarEventId));
+    if (!eventSnapshot.exists) throw new ServiceError('EVENT_UNAVAILABLE');
+    const policy = classifyRegistrationManagementPolicy(eventSnapshot.data(), now());
+    return { reference, entry, policy };
+  }
+
+  async function cancelLiveRegistration({ transaction, payload, reference, entry, policy }) {
+    if (entry.status === CANCELLED_STATUS) return publicRegistration(entry, policy);
+    if (!isLiveRegistrationStatus(entry.status)) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
+    if (!policy.canCancel) throw new ServiceError('REGISTRATION_CANCELLATION_CLOSED');
+    const aggregateReference = registrationRef(payload.calendarEventId);
+    const aggregateSnapshot = await transaction.get(aggregateReference);
+    const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
+    const counts = readLiveCounts(aggregate);
+    const previousIdentityHashes = identityHashesForEntry(payload.calendarEventId, entry);
+    const identityLocks = await readIdentityLocks(
+      transaction,
+      payload.calendarEventId,
+      previousIdentityHashes,
+    );
+    const timestamp = FieldValue.serverTimestamp();
+    transaction.update(reference, {
+      status: CANCELLED_STATUS,
+      cancelledAt: timestamp,
+      updatedAt: timestamp,
+    });
+    for (const { reference: identityReference, snapshot: identitySnapshot } of identityLocks.values()) {
+      if (identitySnapshot.exists
+        && identitySnapshot.data().registrationId === payload.registrationId) {
+        transaction.delete(identityReference);
+      }
+    }
+    writeCounts(transaction, payload.calendarEventId, {
+      activeCount: Math.max(0, counts.activeCount - (entry.status === ACTIVE_STATUS ? 1 : 0)),
+      waitlistedCount: Math.max(0, counts.waitlistedCount - (entry.status === WAITLISTED_STATUS ? 1 : 0)),
+      nextWaitlistSequence: counts.nextWaitlistSequence,
+    }, timestamp);
+    return publicRegistration({
+      ...entry,
+      status: CANCELLED_STATUS,
+      cancelledAt: timestamp,
+      updatedAt: timestamp,
+    }, policy);
+  }
+
+  async function updateLiveRegistration({
+    transaction,
+    payload,
+    reference,
+    entry,
+    policy,
+    exposeIdentityConflictKind = false,
+  }) {
+    if (!isLiveRegistrationStatus(entry.status)) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
+    if (!policy.canUpdate) throw new ServiceError('REGISTRATION_UPDATE_CLOSED');
+    const nextFields = {
+      playerName: payload.playerName,
+      officialId: payload.officialId,
+      deckName: payload.deckName,
+      honorId: payload.honorId,
+    };
+    const nextIdentities = normalizeIdentities(nextFields);
+    const nextIdentityHashes = hashesForIdentities(payload.calendarEventId, nextIdentities);
+    const previousIdentityHashes = identityHashesForEntry(payload.calendarEventId, entry);
+    const allIdentityHashes = [...new Set([...previousIdentityHashes, ...nextIdentityHashes])];
+    const aggregateSnapshot = await transaction.get(registrationRef(payload.calendarEventId));
+    const aggregate = aggregateSnapshot.exists ? aggregateSnapshot.data() : null;
+    const conflictCodeForIdentity = (identity) => {
+      if (!exposeIdentityConflictKind) return 'POSSIBLE_DUPLICATE_REGISTRATION';
+      return identity.startsWith('official:') ? 'OFFICIAL_ID_CONFLICT' : 'HONOR_ID_CONFLICT';
+    };
+    await checkLegacyIdentityConflicts({
+      transaction,
+      eventId: payload.calendarEventId,
+      registrationId: payload.registrationId,
+      requestedIdentities: nextIdentities,
+      aggregate,
+      conflictCodeForIdentity,
+    });
+    const identityLocks = await readIdentityLocks(
+      transaction,
+      payload.calendarEventId,
+      allIdentityHashes,
+    );
+    const identityByHash = new Map(nextIdentityHashes.map((hash, index) => [hash, nextIdentities[index]]));
+    for (const hash of nextIdentityHashes) {
+      const duplicateSnapshot = identityLocks.get(hash).snapshot;
+      if (duplicateSnapshot.exists
+        && duplicateSnapshot.data().registrationId !== payload.registrationId
+        && isLiveRegistrationStatus(duplicateSnapshot.data().status)) {
+        throw new ServiceError(conflictCodeForIdentity(identityByHash.get(hash)));
+      }
+    }
+    let rankResult = { state: 'not_applicable', rank: null };
+    if (entry.status === WAITLISTED_STATUS) {
+      const waitlistedSnapshot = await transaction.get(entriesWithStatus(payload.calendarEventId, WAITLISTED_STATUS));
+      rankResult = waitlistRank(waitlistedSnapshot, payload.registrationId, entry.waitlistSequence);
+    }
+    const timestamp = FieldValue.serverTimestamp();
+    for (const hash of nextIdentityHashes) {
+      transaction.set(identityLocks.get(hash).reference, {
+        schemaVersion: SCHEMA_VERSION,
+        registrationId: payload.registrationId,
+        status: entry.status,
+        updatedAt: timestamp,
+      });
+    }
+    for (const hash of previousIdentityHashes.filter((value) => !nextIdentityHashes.includes(value))) {
+      const previousLock = identityLocks.get(hash);
+      if (previousLock.snapshot.exists
+        && previousLock.snapshot.data().registrationId === payload.registrationId) {
+        transaction.delete(previousLock.reference);
+      }
+    }
+    transaction.update(reference, {
+      ...nextFields,
+      identityHash: nextIdentityHashes[0] ?? null,
+      identityHashes: nextIdentityHashes,
+      updatedAt: timestamp,
+    });
+    return {
+      ...publicRegistration({ ...entry, ...nextFields }, policy, rankResult),
+      ...nextFields,
+    };
+  }
+
   async function manage(rawPayload, rawIp) {
     try {
+      const payload = validateManagePayload(rawPayload);
       const ip = normalizeTrustedIp(rawIp);
       await consumeRateLimit({ scope: 'manage_ip', subject: ip, limit: 30, windowMs: 5 * 60 * 1000 });
-      const payload = validateManagePayload(rawPayload);
 
       return await db.runTransaction(async (transaction) => {
         const { reference, entry, policy } = await getVerifiedEntryAndEvent(transaction, payload);
-        if (payload.action === 'get') return publicRegistration(entry, policy);
-        if (payload.action === 'cancel') {
-          if (entry.status === CANCELLED_STATUS) return publicRegistration(entry, policy);
-          if (entry.status !== ACTIVE_STATUS) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
-          if (!policy.canCancel) throw new ServiceError('REGISTRATION_CANCELLATION_CLOSED');
-          const aggregateReference = registrationRef(payload.calendarEventId);
-          const activeSnapshot = await transaction.get(aggregateReference.collection('entries').where('status', '==', ACTIVE_STATUS));
-          const activeCount = Math.max(0, activeSnapshot.size - 1);
-          const timestamp = FieldValue.serverTimestamp();
-          transaction.update(reference, {
-            status: CANCELLED_STATUS,
-            cancelledAt: timestamp,
-            updatedAt: timestamp,
-          });
-          if (entry.identityHash) transaction.delete(identityRef(payload.calendarEventId, entry.identityHash));
-          transaction.set(aggregateReference, { schemaVersion: SCHEMA_VERSION, activeCount, updatedAt: timestamp }, { merge: true });
-          transaction.set(statsRef(payload.calendarEventId), { schemaVersion: SCHEMA_VERSION, activeCount, updatedAt: timestamp });
-          return { ...publicRegistration(entry, policy), status: CANCELLED_STATUS, canUpdate: false, canCancel: false };
-        }
-
-        if (entry.status !== ACTIVE_STATUS) throw new ServiceError('REGISTRATION_NOT_ACTIVE');
-        if (!policy.canUpdate) throw new ServiceError('REGISTRATION_UPDATE_CLOSED');
-        const nextFields = {
-          playerName: payload.playerName,
-          officialId: payload.officialId,
-          deckName: payload.deckName,
-          honorId: payload.honorId,
-        };
-        const nextIdentity = normalizeIdentity(nextFields);
-        const nextIdentityHash = nextIdentity ? hmac(secret, 'identity', `${payload.calendarEventId}:${nextIdentity}`) : null;
-        if (nextIdentityHash && nextIdentityHash !== entry.identityHash) {
-          const nextIdentityReference = identityRef(payload.calendarEventId, nextIdentityHash);
-          const duplicateSnapshot = await transaction.get(nextIdentityReference);
-          if (duplicateSnapshot.exists && duplicateSnapshot.data().status === ACTIVE_STATUS) {
-            throw new ServiceError('POSSIBLE_DUPLICATE_REGISTRATION');
+        if (payload.action === 'get') {
+          let rankResult = { state: 'not_applicable', rank: null };
+          if (entry.status === WAITLISTED_STATUS) {
+            const waitlistedSnapshot = await transaction.get(entriesWithStatus(payload.calendarEventId, WAITLISTED_STATUS));
+            rankResult = waitlistRank(waitlistedSnapshot, payload.registrationId, entry.waitlistSequence);
           }
-          transaction.set(nextIdentityReference, {
-            schemaVersion: SCHEMA_VERSION,
-            registrationId: payload.registrationId,
-            status: ACTIVE_STATUS,
-            updatedAt: FieldValue.serverTimestamp(),
-          });
+          return publicRegistration(entry, policy, rankResult);
         }
-        if (entry.identityHash && entry.identityHash !== nextIdentityHash) {
-          transaction.delete(identityRef(payload.calendarEventId, entry.identityHash));
+        if (payload.action === 'cancel') {
+          return cancelLiveRegistration({ transaction, payload, reference, entry, policy });
         }
-        transaction.update(reference, {
-          ...nextFields,
-          identityHash: nextIdentityHash,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        return { ...publicRegistration({ ...entry, ...nextFields }, policy), ...nextFields };
+        return updateLiveRegistration({ transaction, payload, reference, entry, policy });
       });
     } catch (error) {
       const converted = asServiceError(error);
@@ -266,5 +573,29 @@ export function createPreRegistrationService({ db, FieldValue, Timestamp, secret
     }
   }
 
-  return { submit, manage, consumeRateLimit };
+  async function adminManage(rawPayload) {
+    try {
+      const payload = validateAdminManagePayload(rawPayload);
+      return await db.runTransaction(async (transaction) => {
+        const { reference, entry, policy } = await getAdminEntryAndEvent(transaction, payload);
+        if (payload.action === 'cancel') {
+          return cancelLiveRegistration({ transaction, payload, reference, entry, policy });
+        }
+        return updateLiveRegistration({
+          transaction,
+          payload,
+          reference,
+          entry,
+          policy,
+          exposeIdentityConflictKind: true,
+        });
+      });
+    } catch (error) {
+      const converted = asServiceError(error);
+      if (converted.code === 'NOT_FOUND') throw new ServiceError('REGISTRATION_NOT_FOUND');
+      throw converted;
+    }
+  }
+
+  return { submit, manage, adminManage, consumeRateLimit };
 }

@@ -52,11 +52,20 @@ test('unlinked, malformed, and started events fail closed', () => {
   assert.equal(classifyPreRegistrationImportAvailability({ event: linkedEvent, entries: [entry('reg-1')], isAdmin: true, now: Date.parse('2031-01-01T00:00:00Z') }).status, 'event_started');
 });
 
-test('entry availability distinguishes active, cancelled, same-target, and cross-target imports', () => {
+test('entry availability distinguishes active, waitlisted, cancelled, same-target, and cross-target imports', () => {
   assert.equal(classifyPreRegistrationImportEntry(entry('reg-1'), 'tournament-1').status, 'available');
+  assert.equal(classifyPreRegistrationImportEntry(entry('reg-wait', { status: 'waitlisted' }), 'tournament-1').status, 'waitlisted');
   assert.equal(classifyPreRegistrationImportEntry(entry('reg-1', { status: 'cancelled' }), 'tournament-1').status, 'cancelled');
   assert.equal(classifyPreRegistrationImportEntry(entry('reg-1', { importedTournamentId: 'tournament-1' }), 'tournament-1').status, 'already_imported');
   assert.equal(classifyPreRegistrationImportEntry(entry('reg-1', { importedTournamentId: 'tournament-2' }), 'tournament-1').status, 'import_conflict');
+});
+
+test('waitlisted entries never appear in the active-only handoff selection', () => {
+  const entries = [entry('reg-active'), entry('reg-wait', { status: 'waitlisted' })];
+  assert.deepEqual(
+    classifyPreRegistrationImportAvailability({ event: linkedEvent, entries, isAdmin: true, now: 0 }).selectableIds,
+    ['reg-active'],
+  );
 });
 
 test('selection is exact, unique, sorted, and capped at 128 entries', () => {

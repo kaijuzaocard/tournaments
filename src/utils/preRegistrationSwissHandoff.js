@@ -20,7 +20,9 @@ function eventStartMillis(event) {
 
 export function classifyPreRegistrationImportEntry(entry, targetSwissTournamentId) {
   if (!entry || typeof entry !== 'object' || !SAFE_ID.test(text(entry.registrationId))) return { status: 'malformed' };
-  if (entry.status !== 'active') return { status: 'cancelled' };
+  if (entry.status === 'waitlisted') return { status: 'waitlisted' };
+  if (entry.status === 'cancelled') return { status: 'cancelled' };
+  if (entry.status !== 'active') return { status: 'malformed' };
   const importedTournamentId = text(entry.importedTournamentId);
   if (!importedTournamentId) return { status: 'available' };
   if (importedTournamentId === text(targetSwissTournamentId)) return { status: 'already_imported' };
