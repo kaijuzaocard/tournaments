@@ -5,6 +5,7 @@ import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc
 import { getFunctions } from 'firebase/functions';
 import { Calendar, Clock, MapPin, Plus, Trash2, Trophy, Swords, Zap, Store, Image as ImageIcon, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, LayoutList, Tags, BookmarkPlus, BookOpen, User, Phone, CheckCircle2, MessageCircle, Lock, LogOut, Edit, X, Save, Sparkles, UploadCloud, Gift, Send, Coffee, Info, Link2, ExternalLink } from 'lucide-react';
 import { FIREBASE_ADMIN_UIDS, isFirebaseAdmin } from './adminAuth';
+import { bootstrapFirebaseAuth } from './authBootstrap';
 import {
   DEFAULT_SWISS_APP_URL,
   buildSwissHandoffUrl,
@@ -369,27 +370,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+
     const initAuth = async () => {
       try {
-        if (globalThis.__initial_auth_token) {
-          try {
-            await signInWithCustomToken(auth, globalThis.__initial_auth_token);
-          } catch {
-            console.warn("Custom token failed, falling back to anonymous");
-            await signInAnonymously(auth);
-          }
-        } else {
-          await signInAnonymously(auth); 
-        }
+        await bootstrapFirebaseAuth({
+          auth,
+          initialAuthToken: globalThis.__initial_auth_token,
+          signInWithCustomToken,
+          signInAnonymously,
+        });
       } catch (error) {
         console.error("Firebase 驗證失敗", error);
         setIsLoading(false); 
       }
     };
-    initAuth();
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
+
+    void initAuth();
     return () => unsubscribeAuth();
   }, []);
 

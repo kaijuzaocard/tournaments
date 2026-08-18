@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test tests/swissHandoff.test.js tests/preRegistration.test.js tests/preRegistrationSwissHandoff.test.js",
+    "test": "node --test tests/authBootstrap.test.js tests/swissHandoff.test.js tests/preRegistration.test.js tests/preRegistrationSwissHandoff.test.js",
     "test:functions": "npm --prefix functions test",
     "test:rules": "node scripts/runRulesEmulatorTests.js",
     "test:emulators": "node scripts/runPreRegistrationEmulatorTests.js"
