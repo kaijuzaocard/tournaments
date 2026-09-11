@@ -55,7 +55,8 @@ fs.writeFileSync(
   }, null, 2)
 );
 
-const testCommand = `node --test "${testFile}"`;
+const projectionTest = path.join(projectRoot, 'tests', 'catalogPreorderProjectionRules.test.js');
+const testCommand = `node --test --test-concurrency=1 "${testFile}" "${projectionTest}"`;
 const result = spawnSync(
   process.execPath,
   [
