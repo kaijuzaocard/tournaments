@@ -63,7 +63,8 @@ try {
   console.log(`ISOLATION project=demo-kaijuzaocard-calendar host=127.0.0.1:${port} single-project-error=true`);
   console.log(`Rules=${rulesPath}\nEmulator log=${path.join(scratch, 'emulator.log')}`);
   const tests = spawn(process.execPath, ['--test', '--test-concurrency=1',
-    path.join(root, 'tests/firestoreRules.test.js'), path.join(root, 'tests/catalogPrivateNotesRules.test.js')
+    path.join(root, 'tests/firestoreRules.test.js'), path.join(root, 'tests/catalogPrivateNotesRules.test.js'),
+    path.join(root, 'tests/catalogPreorderProjectionRules.test.js')
   ], { cwd: root, windowsHide: true, stdio: 'inherit', env: { ...childEnv,
     FIRESTORE_EMULATOR_HOST: `127.0.0.1:${port}`, VITE_FIREBASE_ADMIN_UIDS: uid,
     CATALOG_PRIVATE_NOTES_MODULE: catalogModule
