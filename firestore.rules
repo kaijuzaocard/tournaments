@@ -126,6 +126,17 @@ service cloud.firestore {
 
     // Public catalog data. Keep writes server/admin-controlled; the catalog's
     // client-side password is not an authorization boundary.
+    // POS owns publication. Browser clients (including Catalog admins) only read.
+    match /artifacts/kaijuzaocard-catalog/public/data/preorder_activities/{preorderId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    // Durable authenticated acknowledgements are exclusively server-owned.
+    match /artifacts/kaijuzaocard-catalog/private/data/preorder_publication_receipts/{publicationId} {
+      allow read, write: if false;
+    }
+
     match /artifacts/kaijuzaocard-catalog/public/data/product_categories/{documentId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
